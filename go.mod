@@ -1,8 +1,9 @@
 module github.com/povsister/dns-circuit
 
-go 1.20
+go 1.21
 
 require (
+	github.com/google/gopacket v1.1.20-0.20220810144506-32ee38206866
 	github.com/v2fly/v2ray-core/v5 v5.7.0
 	golang.org/x/net v0.14.0
 )

@@ -2,8 +2,9 @@ package iface
 
 import (
 	"fmt"
-	"golang.org/x/net/ipv4"
 	"net"
+
+	"golang.org/x/net/ipv4"
 )
 
 func ListenIPv4ByProtocol(protoNum int, addr string, modRc ...func(rc *ipv4.RawConn) error) (rc *ipv4.RawConn, err error) {
