@@ -9,7 +9,7 @@ import (
 )
 
 func main() {
-	sock, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_RAW, 89)
+	sock, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_RAW, syscall.IPPROTO_RAW)
 	if err != nil {
 		panic(err)
 	}
