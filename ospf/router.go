@@ -108,7 +108,7 @@ func (r *Router) runRecvLoop() {
 			copy(payload, buf[ipv4.HeaderLen:n])
 			select {
 			case r.recvQ <- payload:
-				fmt.Printf("Sent %d bytes for processing\n", payload)
+				fmt.Printf("Sent %d bytes for processing\n", payloadLen)
 			default:
 				fmt.Printf("Discarded %d bytes due to recvQ full\n", payloadLen)
 			}
