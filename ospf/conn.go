@@ -1,10 +1,12 @@
 package ospf
 
 import (
+	"context"
 	"encoding/binary"
 	"fmt"
 	"net"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/google/gopacket"
@@ -23,7 +25,7 @@ const (
 	// IPProtocolNum OSPF申请的IP协议号. per RFC2328 A.1
 	IPProtocolNum = 89
 	// IPPacketTos OSPF使用的IP包类别和优先级. per RFC2328 A.1 and RFC791 3.1
-	IPPacketTos = 0b11000000
+	IPPacketTos = 0b11000000 // 0xc0
 
 	MulticastTTL = 1
 )
@@ -44,14 +46,14 @@ func (o *Conn) Close() error {
 	return o.rc.Close()
 }
 
-func ListenOSPFv2Multicast(ifi *net.Interface, addr string) (ospf *Conn, err error) {
+func ListenOSPFv2Multicast(ctx context.Context, ifi *net.Interface, addr string) (ospf *Conn, err error) {
 	ospf = &Conn{
 		Version: 2,
 		addr:    addr,
 		laddr:   net.ParseIP(addr),
 		ifi:     ifi,
 	}
-	rc, err := iface.ListenIPv4ByProtocol(IPProtocolNum, addr,
+	rc, err := iface.ListenIPv4ByProtocol(ctx, IPProtocolNum, addr,
 		func(rc *ipv4.RawConn) error {
 			// 绑定多播的接口
 			return rc.SetMulticastInterface(ifi)
@@ -87,13 +89,10 @@ func ListenOSPFv2Multicast(ifi *net.Interface, addr string) (ospf *Conn, err err
 	return
 }
 
-func (o *Conn) Read(buf []byte) (int, error) {
+func (o *Conn) Read(buf []byte) (int, *ipv4.Header, error) {
 	_ = o.rc.SetReadDeadline(time.Now().Add(1 * time.Second))
-	n, addr, err := o.rc.ReadFromIP(buf)
-	if addr != nil {
-		fmt.Printf("Received from %s:%s\n", addr.Network(), addr.String())
-	}
-	return n, err
+	h, payload, _, err := o.rc.ReadFrom(buf)
+	return len(payload) + ipv4.HeaderLen, h, err
 }
 
 func (o *Conn) Write(buf []byte) (int, error) {
@@ -131,18 +130,20 @@ func (o *Conn) Write(buf []byte) (int, error) {
 	return n, err
 }
 
-func dumpBuf(data []byte) {
+func dumpBuf(data []byte) string {
+	ret := &strings.Builder{}
 	for idx, b := range data {
 		if idx > 0 {
-			fmt.Printf(" ")
+			fmt.Fprintf(ret, " ")
 		}
 		if b <= 0xf {
-			fmt.Printf("0%x", b)
+			fmt.Fprintf(ret, "0%x", b)
 		} else {
-			fmt.Printf("%x", b)
+			fmt.Fprintf(ret, "%x", b)
 		}
 		if idx >= len(data)-1 {
-			fmt.Println()
+			fmt.Fprintf(ret, "\n")
 		}
 	}
+	return ret.String()
 }
