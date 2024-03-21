@@ -104,7 +104,7 @@ func (r *Router) runRecvLoop() {
 			if h != nil {
 				fmt.Printf("Received %s->%s payloadSize(%d)\n", h.Src.String(), h.Dst.String(), payloadLen)
 			}
-			payload := make([]byte, n)
+			payload := make([]byte, payloadLen)
 			copy(payload, buf[ipv4.HeaderLen:n])
 			select {
 			case r.recvQ <- payload:
