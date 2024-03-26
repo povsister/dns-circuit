@@ -17,7 +17,7 @@ func ListenIPv4ByProtocol(ctx context.Context, protoNum int, addr string, modRc 
 				//if err != nil {
 				//	return
 				//}
-				err = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_REUSEADDR, 1)
+				//err = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_REUSEADDR, 1)
 			})
 		},
 	}
@@ -26,9 +26,12 @@ func ListenIPv4ByProtocol(ctx context.Context, protoNum int, addr string, modRc 
 		return
 	}
 	rc, err = ipv4.NewRawConn(nl)
+	if err != nil {
+		return nil, fmt.Errorf("err ipv4.NewRawConn: %w", err)
+	}
 	// enable all ctrl msg
 	if err = rc.SetControlMessage(^ipv4.ControlFlags(0), true); err != nil {
-		return
+		return nil, fmt.Errorf("err enable all ipv4 ControlMessage: %w", err)
 	}
 	for idx, modFn := range modRc {
 		if err = modFn(rc); err != nil {

@@ -5,6 +5,8 @@ import (
 
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
+
+	"github.com/povsister/dns-circuit/ospf/packet"
 )
 
 func (r *Router) runProcessLoop() {
@@ -42,7 +44,12 @@ func (r *Router) doProcess(payload []byte) {
 		fmt.Println("unexpected non OSPFv2 msg")
 		return
 	}
-	fmt.Printf("Got OSPFv%d %s\nRouterId: %v AreaId:%v\n%s",
-		op.Version, op.Type, op.RouterID, op.AreaID, dumpBuf(payload))
+	oop := (*packet.LayerOSPFv2)(op)
+	hello, err := oop.AsHello()
+	if err != nil {
+		fmt.Println("unexpected non Hello:", err)
+	}
+	fmt.Printf("Got OSPFv%d %s\nRouterId: %v AreaId:%v\n%+v\n",
+		hello.Version, hello.Type, hello.RouterID, hello.AreaID, hello.Content)
 
 }

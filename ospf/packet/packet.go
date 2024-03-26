@@ -13,7 +13,7 @@ import (
 // Make it possible to serialize an OSPF message to wire format
 type OSPFv2Packet[T OSPFPayloadV2] struct {
 	layers.OSPFv2
-	Payload T //replace Content interface for marshaling
+	Content T //replace Content interface for marshaling
 }
 
 type OSPFPayloadV2 interface {
@@ -143,6 +143,18 @@ func (p LSUpdatePayload) SerializeToSizedBuffer(b []byte) (err error) {
 	return
 }
 
+func (pt *LSUpdatePayload) parse() (err error) {
+	pt.LSAs = make([]LSAdvertisement, 0, len(pt.LSUpdate.LSAs))
+	for _, l := range pt.LSUpdate.LSAs {
+		lsa := LSAdvertisement{LSA: l}
+		if err = lsa.parse(); err != nil {
+			return
+		}
+		pt.LSAs = append(pt.LSAs, lsa)
+	}
+	return
+}
+
 type LSAcknowledgementPayload []LSAheader
 
 func (p LSAcknowledgementPayload) Size() int {
@@ -166,6 +178,14 @@ func (p LSAcknowledgementPayload) SerializeToSizedBuffer(b []byte) (err error) {
 type LSAdvertisement struct {
 	layers.LSA
 	Content LSAContent
+}
+
+func (pt *LSAdvertisement) parse() error {
+	if int(pt.Length) < LSAheader(pt.LSAheader).Size() {
+		return fmt.Errorf("LSA too short")
+	}
+	// TODO: drop in all LSA
+	return fmt.Errorf("unimplemented")
 }
 
 func (p LSAdvertisement) Size() int {
@@ -251,6 +271,22 @@ type LSAContent interface {
 	marshalable
 }
 
+type rawLSA []byte
+
+func (p rawLSA) isLSAContent() {}
+
+func (p rawLSA) Size() int {
+	return len(p)
+}
+
+func (p rawLSA) SerializeToSizedBuffer(b []byte) error {
+	if len(b) < len(p) {
+		return ErrBufferLengthTooShort
+	}
+	copy(b, p)
+	return nil
+}
+
 func (v2 *OSPFv2Packet[T]) packetErr(format string, args ...interface{}) error {
 	return fmt.Errorf("malformed ospfv2 %s packet: "+format, append([]interface{}{v2.Type}, args...)...)
 }
@@ -312,9 +348,9 @@ func (v2 *OSPFv2Packet[T]) SerializeTo(b gopacket.SerializeBuffer, opts gopacket
 	}()
 
 	// proc payload first
-	p, err := b.AppendBytes(v2.Payload.Size())
+	p, err := b.AppendBytes(v2.Content.Size())
 	if err != nil {
 		return
 	}
-	return v2.Payload.SerializeToSizedBuffer(p)
+	return v2.Content.SerializeToSizedBuffer(p)
 }

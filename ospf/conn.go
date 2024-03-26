@@ -56,16 +56,28 @@ func ListenOSPFv2Multicast(ctx context.Context, ifi *net.Interface, addr string)
 	rc, err := iface.ListenIPv4ByProtocol(ctx, IPProtocolNum, addr,
 		func(rc *ipv4.RawConn) error {
 			// 绑定多播的接口
-			return rc.SetMulticastInterface(ifi)
+			if err := rc.SetMulticastInterface(ifi); err != nil {
+				return fmt.Errorf("err SetMulticastInterface: %w", err)
+			}
+			return nil
 		}, func(rc *ipv4.RawConn) error {
 			// 为了确保多播的包不会传送多跳，IP 包的 TTL 必须设定为 1
-			return rc.SetMulticastTTL(MulticastTTL)
+			if err := rc.SetMulticastTTL(MulticastTTL); err != nil {
+				return fmt.Errorf("err SetMulticastTTL: %w", err)
+			}
+			return nil
 		}, func(rc *ipv4.RawConn) error {
 			// 所有的 OSPF 路由协议包使用数值为二进制 0000 的普通 TOS 服务,
 			// 路由协议包中的 IP 优先级被应该被设定为 Internetwork Control
-			return rc.SetTOS(IPPacketTos)
+			if err := rc.SetTOS(IPPacketTos); err != nil {
+				return fmt.Errorf("err SetTOS: %w", err)
+			}
+			return nil
 		}, func(rc *ipv4.RawConn) error {
-			return rc.SetMulticastLoopback(false)
+			if err := rc.SetMulticastLoopback(false); err != nil {
+				return fmt.Errorf("err SetMulticastLoopback: %w", err)
+			}
+			return nil
 		}, func(rc *ipv4.RawConn) (err error) {
 			// 加入指定的multicast group
 			groups := []*net.IPAddr{{IP: net.ParseIP(AllSPFRouters)}}
