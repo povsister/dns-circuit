@@ -18,7 +18,7 @@ type OSPFv2Packet[T OSPFPayloadV2] struct {
 
 type OSPFPayloadV2 interface {
 	HelloPayloadV2 | DbDescPayload |
-		LSReqPayload | LSUpdatePayload | LSAcknowledgementPayload
+		LSRequestPayload | LSUpdatePayload | LSAcknowledgementPayload
 	marshalable
 }
 
@@ -74,9 +74,9 @@ func (p DbDescPayload) SerializeToSizedBuffer(b []byte) (err error) {
 	return
 }
 
-type LSReqPayload []LSRequest
+type LSRequestPayload []LSReq
 
-func (p LSReqPayload) Size() int {
+func (p LSRequestPayload) Size() int {
 	total := 0
 	for _, eachP := range p {
 		total += eachP.Size()
@@ -84,7 +84,7 @@ func (p LSReqPayload) Size() int {
 	return total
 }
 
-func (p LSReqPayload) SerializeToSizedBuffer(b []byte) (err error) {
+func (p LSRequestPayload) SerializeToSizedBuffer(b []byte) (err error) {
 	if len(b) < p.Size() {
 		return ErrBufferLengthTooShort
 	}
@@ -98,13 +98,14 @@ func (p LSReqPayload) SerializeToSizedBuffer(b []byte) (err error) {
 	return
 }
 
-type LSRequest layers.LSReq
+// LSReq stands for a single link state request entry.
+type LSReq layers.LSReq
 
-func (p LSRequest) Size() int {
+func (p LSReq) Size() int {
 	return 12
 }
 
-func (p LSRequest) SerializeToSizedBuffer(b []byte) (err error) {
+func (p LSReq) SerializeToSizedBuffer(b []byte) (err error) {
 	if len(b) < p.Size() {
 		return ErrBufferLengthTooShort
 	}
