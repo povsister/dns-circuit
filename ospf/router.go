@@ -26,6 +26,9 @@ type Router struct {
 	hasCompletelyShutdown sync.WaitGroup
 	closeErr              error
 	closeOnce             sync.Once
+
+	// ospf instance
+	ins *Instance
 }
 
 func NewRouter(ifName string, addr string) (*Router, error) {
