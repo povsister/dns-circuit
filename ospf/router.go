@@ -17,7 +17,7 @@ type Router struct {
 	ifi    *net.Interface
 
 	c     *Conn
-	recvQ chan []byte
+	recvQ chan ospfMsg
 
 	startOnce sync.Once
 	ctx       context.Context
@@ -41,7 +41,7 @@ func NewRouter(ifName string, addr string) (*Router, error) {
 		ifName: ifName,
 		ifi:    ifi,
 		c:      conn,
-		recvQ:  make(chan []byte, 20),
+		recvQ:  make(chan ospfMsg, 20),
 	}
 	return r, nil
 }
@@ -107,7 +107,10 @@ func (r *Router) runRecvLoop() {
 			payload := make([]byte, payloadLen)
 			copy(payload, buf[ipv4.HeaderLen:n])
 			select {
-			case r.recvQ <- payload:
+			case r.recvQ <- ospfMsg{
+				h: h,
+				p: payload,
+			}:
 				fmt.Printf("Sent %d bytes for processing\n", payloadLen)
 			default:
 				fmt.Printf("Discarded %d bytes due to recvQ full\n", payloadLen)
