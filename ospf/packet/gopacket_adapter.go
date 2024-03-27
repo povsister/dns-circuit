@@ -1,10 +1,15 @@
 package packet
 
 import (
+	"errors"
 	"fmt"
 	"unsafe"
 
 	"github.com/google/gopacket/layers"
+)
+
+var (
+	ErrNotImplemented = errors.New("not implemented")
 )
 
 type LayerOSPFv2 layers.OSPFv2
@@ -22,8 +27,11 @@ func (l *LayerOSPFv2) AsHello() (*OSPFv2Packet[HelloPayloadV2], error) {
 func (l *LayerOSPFv2) AsDbDescription() (*OSPFv2Packet[DbDescPayload], error) {
 	if dbDesc, ok := l.Content.(layers.DbDescPkg); ok {
 		return &OSPFv2Packet[DbDescPayload]{
-			OSPFv2:  layers.OSPFv2(*l),
-			Content: DbDescPayload(dbDesc),
+			OSPFv2: layers.OSPFv2(*l),
+			Content: DbDescPayload{
+				DbDescPkg: dbDesc,
+				LSAinfo:   *(*[]LSAheader)(unsafe.Pointer(&dbDesc.LSAinfo)),
+			},
 		}, nil
 	}
 	return nil, fmt.Errorf("expecting layers.DbDescPkg but got %T", l.Content)
@@ -39,12 +47,17 @@ func (l *LayerOSPFv2) AsLSRequest() (*OSPFv2Packet[LSRequestPayload], error) {
 	return nil, fmt.Errorf("expecting []layers.LSReq but got %T", l.Content)
 }
 
-func (l *LayerOSPFv2) AsLSUpdate() (*OSPFv2Packet[LSUpdatePayload], error) {
+func (l *LayerOSPFv2) AsLSUpdate() (ret *OSPFv2Packet[LSUpdatePayload], err error) {
 	if lsu, ok := l.Content.(layers.LSUpdate); ok {
-		ret := &OSPFv2Packet[LSUpdatePayload]{
+		ret = &OSPFv2Packet[LSUpdatePayload]{
 			OSPFv2:  layers.OSPFv2(*l),
 			Content: LSUpdatePayload{LSUpdate: lsu},
 		}
+		defer func() {
+			if err != nil {
+				err = fmt.Errorf("err parse LSUpdate.Content: %w", err)
+			}
+		}()
 		return ret, ret.Content.parse()
 	}
 	return nil, fmt.Errorf("expecting layers.LSUpdate but got %T", l.Content)
@@ -58,4 +71,57 @@ func (l *LayerOSPFv2) AsLSAcknowledgment() (*OSPFv2Packet[LSAcknowledgementPaylo
 		}, nil
 	}
 	return nil, fmt.Errorf("expecting []layers.LSAheader but got %T", l.Content)
+}
+
+func (p LSAdvertisement) AsV2RouterLSA() (ret LSAdv[V2RouterLSA], err error) {
+	if lsAdv, ok := p.LSA.Content.(layers.RouterLSAV2); ok {
+		return LSAdv[V2RouterLSA]{
+			LSAdvertisement: p,
+			Content: V2RouterLSA{
+				RouterLSAV2: lsAdv,
+				Routers: func() (ret []RouterV2) {
+					for _, r := range lsAdv.Routers {
+						ret = append(ret, RouterV2{
+							RouterV2: r,
+						})
+					}
+					return
+				}(),
+			},
+		}, nil
+	}
+	err = fmt.Errorf("expecting layers.RouterLSAV2 but got %T", p.LSA.Content)
+	return
+}
+
+func (p LSAdvertisement) AsV2NetworkLSA() (ret LSAdv[V2NetworkLSA], err error) {
+	if lsAdv, ok := p.LSA.Content.(layers.NetworkLSAV2); ok {
+		return LSAdv[V2NetworkLSA]{
+			LSAdvertisement: p,
+			Content:         V2NetworkLSA(lsAdv),
+		}, nil
+	}
+	err = fmt.Errorf("expecting layers.NetworkLSAV2 but got %T", p.LSA.Content)
+	return
+}
+
+func (p LSAdvertisement) AsV2SummaryLSAType3() (ret LSAdv[V2SummaryLSAType3], err error) {
+	err = fmt.Errorf("err V2SummaryLSAType3 %w", ErrNotImplemented)
+	return
+}
+
+func (p LSAdvertisement) AsV2SummaryLSAType4() (ret LSAdv[V2SummaryLSAType4], err error) {
+	err = fmt.Errorf("err V2SummaryLSAType4 %w", ErrNotImplemented)
+	return
+}
+
+func (p LSAdvertisement) AsV2ASExternalLSA() (ret LSAdv[V2ASExternalLSA], err error) {
+	if lsAdv, ok := p.LSA.Content.(layers.ASExternalLSAV2); ok {
+		return LSAdv[V2ASExternalLSA]{
+			LSAdvertisement: p,
+			Content:         V2ASExternalLSA(lsAdv),
+		}, nil
+	}
+	err = fmt.Errorf("expecting layers.ASExternalLSAV2 but got %T", p.LSA.Content)
+	return
 }

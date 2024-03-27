@@ -51,7 +51,10 @@ func (p HelloPayloadV2) SerializeToSizedBuffer(b []byte) error {
 
 type HelloPayloadV3 layers.HelloPkg
 
-type DbDescPayload layers.DbDescPkg
+type DbDescPayload struct {
+	layers.DbDescPkg
+	LSAinfo []LSAheader
+}
 
 func (p DbDescPayload) Size() int {
 	return 8 + LSAheader{}.Size()*len(p.LSAinfo)
@@ -66,8 +69,7 @@ func (p DbDescPayload) SerializeToSizedBuffer(b []byte) (err error) {
 	b[3] = uint8(p.Flags)
 	binary.BigEndian.PutUint32(b[4:8], p.DDSeqNumber)
 	for idx, lsaH := range p.LSAinfo {
-		thisLSAh := LSAheader(lsaH)
-		if err = thisLSAh.SerializeToSizedBuffer(b[8+idx*thisLSAh.Size() : 8+(idx+1)*thisLSAh.Size()]); err != nil {
+		if err = lsaH.SerializeToSizedBuffer(b[8+idx*lsaH.Size() : 8+(idx+1)*lsaH.Size()]); err != nil {
 			return
 		}
 	}
@@ -148,7 +150,7 @@ func (pt *LSUpdatePayload) parse() (err error) {
 	for _, l := range pt.LSUpdate.LSAs {
 		lsa := LSAdvertisement{LSA: l}
 		if err = lsa.parse(); err != nil {
-			return
+			return fmt.Errorf("err parse LSA: %w", err)
 		}
 		pt.LSAs = append(pt.LSAs, lsa)
 	}
@@ -177,43 +179,77 @@ func (p LSAcknowledgementPayload) SerializeToSizedBuffer(b []byte) (err error) {
 
 type LSAdvertisement struct {
 	layers.LSA
+	LSAheader
 	Content LSAContent
 }
 
 func (pt *LSAdvertisement) parse() error {
-	if int(pt.Length) < LSAheader(pt.LSAheader).Size() {
+	pt.LSAheader = LSAheader(pt.LSA.LSAheader)
+	if int(pt.Length) < pt.LSAheader.Size() {
 		return fmt.Errorf("LSA too short")
 	}
-	// TODO: drop in all LSA
-	return fmt.Errorf("unimplemented")
+	switch pt.LSType {
+	case layers.RouterLSAtypeV2:
+		lsa, err := pt.AsV2RouterLSA()
+		if err != nil {
+			return err
+		}
+		pt.Content = lsa.Content
+	case layers.NetworkLSAtypeV2:
+		lsa, err := pt.AsV2NetworkLSA()
+		if err != nil {
+			return err
+		}
+		pt.Content = lsa.Content
+	case layers.SummaryLSANetworktypeV2:
+		lsa, err := pt.AsV2SummaryLSAType3()
+		if err != nil {
+			return err
+		}
+		pt.Content = lsa.Content
+	case layers.SummaryLSAASBRtypeV2:
+		lsa, err := pt.AsV2SummaryLSAType4()
+		if err != nil {
+			return err
+		}
+		pt.Content = lsa.Content
+	case layers.ASExternalLSAtypeV2:
+		lsa, err := pt.AsV2ASExternalLSA()
+		if err != nil {
+			return err
+		}
+		pt.Content = lsa.Content
+	default:
+		return fmt.Errorf("LSA.LSType(%x) not implemented", pt.LSType)
+	}
+	return nil
 }
 
 func (p LSAdvertisement) Size() int {
 	if p.Length > 0 {
 		return int(p.Length)
 	}
-	return LSAheader(p.LSAheader).Size() + p.Content.Size()
+	return p.LSAheader.Size() + p.Content.Size()
 }
 
 func (p LSAdvertisement) SerializeToSizedBuffer(b []byte) (err error) {
-	lsaH := LSAheader(p.LSAheader)
-	if len(b) < p.Size() || len(b) < lsaH.Size() || len(b) < p.Content.Size() {
+	if len(b) < p.Size() || len(b) < p.LSAheader.Size() || len(b) < p.Content.Size() {
 		return ErrBufferLengthTooShort
 	}
 
 	// fix length
-	if lsaH.Length <= 0 {
-		lsaH.Length = uint16(lsaH.Size() + p.Content.Size())
+	if p.LSAheader.Length <= 0 {
+		p.LSAheader.Length = uint16(p.LSAheader.Size() + p.Content.Size())
 	}
-	if err = lsaH.SerializeToSizedBuffer(b[0:lsaH.Size()]); err != nil {
+	if err = p.LSAheader.SerializeToSizedBuffer(b[0:p.LSAheader.Size()]); err != nil {
 		return
 	}
-	if err = p.Content.SerializeToSizedBuffer(b[lsaH.Size() : lsaH.Size()+p.Content.Size()]); err != nil {
+	if err = p.Content.SerializeToSizedBuffer(b[p.LSAheader.Size() : p.LSAheader.Size()+p.Content.Size()]); err != nil {
 		return
 	}
 	// fix chksum
 	if p.LSChecksum <= 0 {
-		lsaH.recalculateChecksum(b)
+		p.LSAheader.recalculateChecksum(b)
 	}
 	return
 }
