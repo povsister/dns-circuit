@@ -2,6 +2,7 @@ package ospf
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
@@ -93,6 +94,28 @@ func (r *Router) doProcess(msg ospfMsg) {
 func (r *Router) procHello(hello *packet.OSPFv2Packet[packet.HelloPayloadV2]) {
 	fmt.Printf("Got OSPFv%d %s\nRouterId: %v AreaId:%v\n%+v\n",
 		hello.Version, hello.Type, hello.RouterID, hello.AreaID, hello.Content)
+	r.ins.Area.mu.Lock()
+	defer r.ins.Area.mu.Unlock()
+	isMySelfSeen := false
+	for _, n := range hello.Content.NeighborID {
+		if n == r.ins.cfg.RouterId {
+			isMySelfSeen = true
+			break
+		}
+	}
+	if isMySelfSeen {
+		r.ins.Area.DR = hello.Content.DesignatedRouterID
+		r.ins.Area.BDR = hello.Content.BackupDesignatedRouterID
+		if nb, ok := r.ins.Area.AdjNeighbors[hello.RouterID]; ok {
+			nb.LastSeen = time.Now().Unix()
+			nb.RtId = hello.RouterID
+		} else {
+			r.ins.Area.AdjNeighbors[hello.RouterID] = &KnownNeighbors{
+				RtId:     hello.RouterID,
+				LastSeen: time.Now().Unix(),
+			}
+		}
+	}
 }
 
 func (r *Router) procDatabaseDesc(dbd *packet.OSPFv2Packet[packet.DbDescPayload]) {

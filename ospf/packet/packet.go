@@ -69,9 +69,11 @@ func (p DbDescPayload) SerializeToSizedBuffer(b []byte) (err error) {
 	b[3] = uint8(p.Flags)
 	binary.BigEndian.PutUint32(b[4:8], p.DDSeqNumber)
 	for idx, lsaH := range p.LSAinfo {
-		if err = lsaH.SerializeToSizedBuffer(b[8+idx*lsaH.Size() : 8+(idx+1)*lsaH.Size()]); err != nil {
+		thisB := b[8+idx*lsaH.Size() : 8+(idx+1)*lsaH.Size()]
+		if err = lsaH.SerializeToSizedBuffer(thisB); err != nil {
 			return
 		}
+		lsaH.recalculateChecksum(thisB)
 	}
 	return
 }
@@ -169,9 +171,11 @@ func (p LSAcknowledgementPayload) SerializeToSizedBuffer(b []byte) (err error) {
 	}
 	offset := 0
 	for _, h := range p {
-		if err = h.SerializeToSizedBuffer(b[offset : offset+h.Size()]); err != nil {
+		thisB := b[offset : offset+h.Size()]
+		if err = h.SerializeToSizedBuffer(thisB); err != nil {
 			return
 		}
+		h.recalculateChecksum(thisB)
 		offset += h.Size()
 	}
 	return

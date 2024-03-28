@@ -13,6 +13,7 @@ import (
 var (
 	ifName = flag.String("ifname", "", "net if name")
 	laddr  = flag.String("laddr", "", "local addr")
+	rtid   = flag.String("rtid", "", "router id")
 )
 
 func main() {
@@ -28,8 +29,13 @@ func main() {
 	} else if pip4 := pip.To4(); pip4 == nil {
 		panic("laddr is not a IPv4 addr")
 	}
+	if pip := net.ParseIP(*rtid); pip == nil {
+		panic("invalid rtid")
+	} else if pip4 := pip.To4(); pip4 == nil {
+		panic("rtid is not a IPv4 addr")
+	}
 
-	rt, err := ospf.NewRouter(*ifName, *laddr)
+	rt, err := ospf.NewRouter(*ifName, *laddr, *rtid)
 	if err != nil {
 		panic(err)
 	}

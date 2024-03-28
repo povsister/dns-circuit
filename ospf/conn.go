@@ -46,11 +46,11 @@ func (o *Conn) Close() error {
 	return o.rc.Close()
 }
 
-func ListenOSPFv2Multicast(ctx context.Context, ifi *net.Interface, addr string) (ospf *Conn, err error) {
+func ListenOSPFv2Multicast(ctx context.Context, ifi *net.Interface, addr string, srcip string) (ospf *Conn, err error) {
 	ospf = &Conn{
 		Version: 2,
 		addr:    addr,
-		laddr:   net.ParseIP(addr),
+		laddr:   net.ParseIP(srcip),
 		ifi:     ifi,
 	}
 	rc, err := iface.ListenIPv4ByProtocol(ctx, IPProtocolNum, addr,
@@ -107,7 +107,7 @@ func (o *Conn) Read(buf []byte) (int, *ipv4.Header, error) {
 	return len(payload) + ipv4.HeaderLen, h, err
 }
 
-func (o *Conn) Write(buf []byte) (int, error) {
+func (o *Conn) WriteMulticastAllSPF(buf []byte) (int, error) {
 	dst := net.ParseIP(AllSPFRouters)
 	dstIPAddr, _ := net.ResolveIPAddr("ip4", AllSPFRouters)
 	ip := &layers.IPv4{

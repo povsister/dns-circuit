@@ -1,6 +1,7 @@
 package ospf
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"net"
@@ -16,8 +17,10 @@ type Router struct {
 	ifName string
 	ifi    *net.Interface
 
-	c     *Conn
-	recvQ chan ospfMsg
+	c             *Conn
+	recvQ         chan ospfMsg
+	sendQ         chan ospfMsg
+	sendMulticast chan []byte
 
 	startOnce sync.Once
 	ctx       context.Context
@@ -31,20 +34,33 @@ type Router struct {
 	ins *Instance
 }
 
-func NewRouter(ifName string, addr string) (*Router, error) {
+func NewRouter(ifName string, addr string, rtid string) (*Router, error) {
 	ifi, err := net.InterfaceByName(ifName)
 	if err != nil {
 		return nil, fmt.Errorf("ospf: %w", err)
 	}
-	conn, err := ListenOSPFv2Multicast(context.Background(), ifi, addr)
+	conn, err := ListenOSPFv2Multicast(context.Background(), ifi, addr, rtid)
 	if err != nil {
 		return nil, fmt.Errorf("ospf: %w", err)
 	}
 	r := &Router{
-		ifName: ifName,
-		ifi:    ifi,
-		c:      conn,
-		recvQ:  make(chan ospfMsg, 20),
+		ifName:        ifName,
+		ifi:           ifi,
+		c:             conn,
+		recvQ:         make(chan ospfMsg, 20),
+		sendQ:         make(chan ospfMsg, 20),
+		sendMulticast: make(chan []byte, 20),
+		ins: &Instance{
+			cfg: &InstanceConfig{
+				RouterId:           binary.BigEndian.Uint32(net.ParseIP(rtid).To4()[0:4]),
+				HelloInterval:      10,
+				RouterDeadInterval: 40,
+			},
+			Area: &Area{
+				Id:           0, // backbone
+				AdjNeighbors: make(map[uint32]*KnownNeighbors),
+			},
+		},
 	}
 	return r, nil
 }
@@ -56,6 +72,9 @@ func (r *Router) Start() {
 		go r.runRecvLoop()
 		r.hasCompletelyShutdown.Add(1)
 		go r.runProcessLoop()
+		r.hasCompletelyShutdown.Add(1)
+		go r.runMulticastSendLoop()
+		r.runIntervalTasks()
 	})
 }
 
@@ -74,9 +93,26 @@ func (r *Router) runEchoLoop() {
 			r.hasCompletelyShutdown.Done()
 			return
 		default:
-			n, err := r.c.Write([]byte(fmt.Sprintf("Ping%d", time.Now().Unix())))
+			n, err := r.c.WriteMulticastAllSPF([]byte(fmt.Sprintf("Ping%d", time.Now().Unix())))
 			fmt.Printf("Sent %d bytes err(%v)\n", n, err)
 			time.Sleep(1 * time.Second)
+		}
+	}
+}
+
+func (r *Router) runMulticastSendLoop() {
+	for {
+		select {
+		case <-r.ctx.Done():
+			r.hasCompletelyShutdown.Done()
+			return
+		case payload := <-r.sendMulticast:
+			n, err := r.c.WriteMulticastAllSPF(payload)
+			if err != nil {
+				fmt.Println("err write", len(payload), "bytes:", err)
+			} else {
+				fmt.Println("multicast wrote", n, "bytes")
+			}
 		}
 	}
 }
@@ -114,7 +150,7 @@ func (r *Router) runRecvLoop() {
 				h: h,
 				p: payload,
 			}:
-				fmt.Printf("Sent %d bytes for processing\n", payloadLen)
+				//fmt.Printf("Sent %d bytes for processing\n", payloadLen)
 			default:
 				fmt.Printf("Discarded %d bytes due to recvQ full\n", payloadLen)
 			}
@@ -123,7 +159,6 @@ func (r *Router) runRecvLoop() {
 }
 
 func (r *Router) cleanup() {
-
 }
 
 func (r *Router) Close() (err error) {
