@@ -1,5 +1,10 @@
 package ospf
 
+import (
+	"math/rand/v2"
+	"time"
+)
+
 // Several OSPF protocol parameters have fixed architectural values.
 //    These parameters have been referred to in the text by names such as
 //    LSRefreshTime.  The same naming convention is used for the
@@ -69,4 +74,8 @@ const (
 	// MaxSequenceNumber The maximum value that LS Sequence Number can attain.  Its value
 	//        is the signed 32-bit integer 0x7fffffff.
 	MaxSequenceNumber = 0x7fffffff
+)
+
+var (
+	randSource = rand.New(rand.NewPCG(uint64(time.Now().Unix()), uint64(time.Now().Unix()/2)))
 )

@@ -7,6 +7,7 @@ import (
 	"net"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/gopacket"
@@ -19,6 +20,7 @@ import (
 const (
 	// AllSPFRouters 广播网络上，所有运行 OSPF 的路由器必须准备接收发送到该地址的包. per RFC2328 A.1
 	AllSPFRouters = "224.0.0.5"
+	allSPFRouters = 224<<24 | 0<<16 | 0<<8 | 5
 	// AllDRouters 广播网络上，DR 和 BDR 必须准备接收发送到该地址的包. per RFC2328 A.1
 	AllDRouters = "224.0.0.6"
 
@@ -31,11 +33,11 @@ const (
 )
 
 type Conn struct {
-	Version         int
 	multicastGroups []*net.IPAddr
 	ifi             *net.Interface
-	addr            string
-	laddr           net.IP
+	listenAddr      string
+	srcIP           net.IP
+	wMu             *sync.Mutex
 	rc              *ipv4.RawConn
 }
 
@@ -48,10 +50,10 @@ func (o *Conn) Close() error {
 
 func ListenOSPFv2Multicast(ctx context.Context, ifi *net.Interface, addr string, srcip string) (ospf *Conn, err error) {
 	ospf = &Conn{
-		Version: 2,
-		addr:    addr,
-		laddr:   net.ParseIP(srcip),
-		ifi:     ifi,
+		listenAddr: addr,
+		srcIP:      net.ParseIP(srcip),
+		wMu:        &sync.Mutex{},
+		ifi:        ifi,
 	}
 	rc, err := iface.ListenIPv4ByProtocol(ctx, IPProtocolNum, addr,
 		func(rc *ipv4.RawConn) error {
@@ -107,7 +109,47 @@ func (o *Conn) Read(buf []byte) (int, *ipv4.Header, error) {
 	return len(payload) + ipv4.HeaderLen, h, err
 }
 
-func (o *Conn) WriteMulticastAllSPF(buf []byte) (int, error) {
+func (o *Conn) fixIPv4HeaderForSend(b []byte) {
+	switch runtime.GOOS {
+	case "darwin", "ios":
+		// Before FreeBSD 11.0 packets received on raw IP sockets had the ip_len and ip_off fields converted to host byte order.
+		// Packets written to raw IP sockets were expected to have ip_len and ip_off in host byte order.
+		packetLen := binary.BigEndian.Uint16(b[2:4])
+		binary.NativeEndian.PutUint16(b[2:4], packetLen)
+		flagsAndFragOff := binary.BigEndian.Uint16(b[6:8])
+		binary.NativeEndian.PutUint16(b[6:8], flagsAndFragOff)
+	}
+}
+
+func (o *Conn) WriteTo(ospfMsg []byte, dst *net.IPAddr) (n int, err error) {
+	ip := &layers.IPv4{
+		Version:  ipv4.Version,
+		TTL:      MulticastTTL,
+		TOS:      IPPacketTos,
+		Protocol: IPProtocolNum,
+		SrcIP:    o.srcIP,
+		DstIP:    dst.IP,
+	}
+	p := gopacket.NewSerializeBuffer()
+	err = gopacket.SerializeLayers(p, gopacket.SerializeOptions{
+		FixLengths: true,
+	}, ip, gopacket.Payload(ospfMsg))
+	if err != nil {
+		return 0, err
+	}
+	o.fixIPv4HeaderForSend(p.Bytes())
+
+	o.wMu.Lock()
+	defer o.wMu.Unlock()
+	err = o.rc.SetWriteDeadline(time.Now().Add(1 * time.Second))
+	if err != nil {
+		return 0, err
+	}
+	n, err = o.rc.WriteToIP(p.Bytes(), dst)
+	return
+}
+
+func (o *Conn) WriteMulticastAllSPF(buf []byte) (n int, err error) {
 	dst := net.ParseIP(AllSPFRouters)
 	dstIPAddr, _ := net.ResolveIPAddr("ip4", AllSPFRouters)
 	ip := &layers.IPv4{
@@ -115,13 +157,8 @@ func (o *Conn) WriteMulticastAllSPF(buf []byte) (int, error) {
 		TTL:      MulticastTTL,
 		TOS:      IPPacketTos,
 		Protocol: IPProtocolNum,
-		SrcIP:    o.laddr,
+		SrcIP:    o.srcIP,
 		DstIP:    dst,
-	}
-
-	err := o.rc.SetWriteDeadline(time.Now().Add(1 * time.Second))
-	if err != nil {
-		return 0, err
 	}
 	pBuf := gopacket.NewSerializeBuffer()
 	err = gopacket.SerializeLayers(pBuf, gopacket.SerializeOptions{
@@ -130,15 +167,15 @@ func (o *Conn) WriteMulticastAllSPF(buf []byte) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	switch runtime.GOOS {
-	case "darwin", "ios":
-		// Before FreeBSD 11.0 packets received on raw IP sockets had the ip_len and ip_off fields converted to host byte order.
-		// Packets written to raw IP sockets were expected to have ip_len and ip_off in host byte order.
-		binary.NativeEndian.PutUint16(pBuf.Bytes()[2:], ip.Length)
-	}
+	o.fixIPv4HeaderForSend(pBuf.Bytes())
 
-	//dumpBuf(pBuf.Bytes())
-	n, err := o.rc.WriteToIP(pBuf.Bytes(), dstIPAddr)
+	o.wMu.Lock()
+	defer o.wMu.Unlock()
+	err = o.rc.SetWriteDeadline(time.Now().Add(1 * time.Second))
+	if err != nil {
+		return 0, err
+	}
+	n, err = o.rc.WriteToIP(pBuf.Bytes(), dstIPAddr)
 	return n, err
 }
 

@@ -1,6 +1,10 @@
 package ospf
 
-import "net"
+import (
+	"net"
+
+	"github.com/povsister/dns-circuit/ospf/packet"
+)
 
 type RoutingPathType uint8
 
@@ -57,7 +61,7 @@ type RoutingTableEntry struct {
 	//        The only optional capability defined by this specification is
 	//        the ability to process AS-external-LSAs.  For a further
 	//        discussion of OSPF's optional capabilities, see Section 4.5.
-	Options CapOptions
+	Options packet.BitOption
 
 	//    The set of paths to use for a destination may vary based on the OSPF
 	//    area to which the paths belong.  This means that there may be

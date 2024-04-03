@@ -1,135 +1,88 @@
 package ospf
 
 import (
-	"fmt"
-	"time"
-
-	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
 	"golang.org/x/net/ipv4"
 
 	"github.com/povsister/dns-circuit/ospf/packet"
 )
 
-type ospfMsg struct {
-	h *ipv4.Header
-	p []byte // ospf packet
-}
-
-func (r *Router) runProcessLoop() {
-	for {
-		select {
-		case <-r.ctx.Done():
-			r.hasCompletelyShutdown.Done()
-			return
-		case msg := <-r.recvQ:
-			r.doProcess(msg)
-		}
-	}
-}
-
-var decOpts = gopacket.DecodeOptions{
-	Lazy:                     false,
-	NoCopy:                   true,
-	SkipDecodeRecovery:       false,
-	DecodeStreamsAsDatagrams: false,
-}
-
-func (r *Router) doProcess(msg ospfMsg) {
-	fmt.Printf("Processing %d bytes\n", len(msg.p))
-	ps := gopacket.NewPacket(msg.p, layers.LayerTypeOSPF, decOpts)
-	p := ps.Layer(layers.LayerTypeOSPF)
-	if p == nil {
-		fmt.Println("nil OSPF layer")
-		return
-	}
-	l, ok := p.(*layers.OSPFv2)
-	if !ok {
-		fmt.Println("unexpected non OSPFv2 msg")
-		return
-	}
-
-	op := (*packet.LayerOSPFv2)(l)
+func (i *Interface) doParsedMsgProcessing(h *ipv4.Header, op *packet.LayerOSPFv2) {
 	switch op.Type {
 	case layers.OSPFHello:
 		hello, err := op.AsHello()
 		if err != nil {
-			fmt.Println("unexpected non Hello:", err)
+			logErr("unexpected non Hello: %v", err)
 			return
 		}
-		r.procHello(hello)
+		i.Area.procHello(i, h, hello)
 	case layers.OSPFDatabaseDescription:
 		dbd, err := op.AsDbDescription()
 		if err != nil {
-			fmt.Println("unexpected non DatabaseDesc:", err)
+			logErr("unexpected non DatabaseDesc: %v", err)
 			return
 		}
-		r.procDatabaseDesc(dbd)
+		i.Area.procDatabaseDesc(i, h, dbd)
 	case layers.OSPFLinkStateRequest:
 		lsr, err := op.AsLSRequest()
 		if err != nil {
-			fmt.Println("unexpected non LSR:", err)
+			logErr("unexpected non LSR: %v", err)
 			return
 		}
-		r.procLSR(lsr)
+		i.Area.procLSR(i, h, lsr)
 	case layers.OSPFLinkStateUpdate:
 		lsu, err := op.AsLSUpdate()
 		if err != nil {
-			fmt.Println("unexpected non LSU:", err)
+			logErr("unexpected non LSU: %v", err)
 			return
 		}
-		r.procLSU(lsu)
+		i.Area.procLSU(i, h, lsu)
 	case layers.OSPFLinkStateAcknowledgment:
 		lsack, err := op.AsLSAcknowledgment()
 		if err != nil {
-			fmt.Println("unexpected non LSAck:", err)
+			logErr("unexpected non LSAck: %v", err)
 			return
 		}
-		r.procLSAck(lsack)
+		i.Area.procLSAck(i, h, lsack)
 	default:
-		fmt.Println("unknown OSPF packet type", op.Type)
+		logErr("unknown OSPF packet type: %v", op.Type)
 	}
 }
 
-func (r *Router) procHello(hello *packet.OSPFv2Packet[packet.HelloPayloadV2]) {
-	fmt.Printf("Got OSPFv%d %s\nRouterId: %v AreaId:%v\n%+v\n",
+func (a *Area) procHello(i *Interface, h *ipv4.Header, hello *packet.OSPFv2Packet[packet.HelloPayloadV2]) {
+	logDebug("Got OSPFv%d %s\nRouterId: %v AreaId:%v\n%+v\n",
 		hello.Version, hello.Type, hello.RouterID, hello.AreaID, hello.Content)
-	r.ins.Area.mu.Lock()
-	defer r.ins.Area.mu.Unlock()
+
+	neighborId := hello.RouterID
+	neighbor, ok := i.getNeighbor(neighborId)
+	if !ok {
+		neighbor = i.addNeighbor(h, hello)
+	}
+	neighbor.consumeEvent(NbEvHelloReceived)
 	isMySelfSeen := false
-	for _, n := range hello.Content.NeighborID {
-		if n == r.ins.cfg.RouterId {
+	for _, seenNbs := range hello.Content.NeighborID {
+		if seenNbs == a.ins.RouterId {
 			isMySelfSeen = true
 			break
 		}
 	}
 	if isMySelfSeen {
-		r.ins.Area.DR = hello.Content.DesignatedRouterID
-		r.ins.Area.BDR = hello.Content.BackupDesignatedRouterID
-		if nb, ok := r.ins.Area.AdjNeighbors[hello.RouterID]; ok {
-			nb.LastSeen = time.Now().Unix()
-			nb.RtId = hello.RouterID
-		} else {
-			r.ins.Area.AdjNeighbors[hello.RouterID] = &KnownNeighbors{
-				RtId:     hello.RouterID,
-				LastSeen: time.Now().Unix(),
-			}
-		}
+		neighbor.consumeEvent(NbEv2WayReceived)
 	}
 }
 
-func (r *Router) procDatabaseDesc(dbd *packet.OSPFv2Packet[packet.DbDescPayload]) {
+func (a *Area) procDatabaseDesc(i *Interface, h *ipv4.Header, dbd *packet.OSPFv2Packet[packet.DbDescPayload]) {
 
 }
 
-func (r *Router) procLSR(lsr *packet.OSPFv2Packet[packet.LSRequestPayload]) {
+func (a *Area) procLSR(i *Interface, h *ipv4.Header, lsr *packet.OSPFv2Packet[packet.LSRequestPayload]) {
 
 }
 
-func (r *Router) procLSU(lsu *packet.OSPFv2Packet[packet.LSUpdatePayload]) {
+func (a *Area) procLSU(i *Interface, h *ipv4.Header, lsu *packet.OSPFv2Packet[packet.LSUpdatePayload]) {
 
 }
 
-func (r *Router) procLSAck(lsack *packet.OSPFv2Packet[packet.LSAcknowledgementPayload]) {
+func (a *Area) procLSAck(i *Interface, h *ipv4.Header, lsack *packet.OSPFv2Packet[packet.LSAcknowledgementPayload]) {
 
 }

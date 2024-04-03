@@ -1,33 +1,46 @@
 package ospf
 
 import (
+	"context"
 	"net"
-	"time"
+	"sync"
 
 	"github.com/povsister/dns-circuit/ospf/packet"
 )
 
 type AreaConfig struct {
-	AreaId  uint32
-	Address *AreaAddress
-	Options CapOptions
+	Instance *Instance
+	AreaId   uint32
+	Address  *AreaAddress
+	Options  packet.BitOption
 }
 
-func NewArea(c *AreaConfig) *Area {
+func NewArea(ctx context.Context, c *AreaConfig) *Area {
 	return &Area{
-		AreaId:            c.AreaId,
-		Addresses:         []*AreaAddress{c.Address},
-		TransitCapability: true,
+		ctx:                       ctx,
+		wg:                        &sync.WaitGroup{},
+		ins:                       c.Instance,
+		AreaId:                    c.AreaId,
+		Addresses:                 []*AreaAddress{c.Address},
+		Options:                   c.Options,
+		ExternalRoutingCapability: c.Options.IsBitSet(packet.CapabilityEbit),
+		TransitCapability:         true,
 	}
 }
 
 func (a *Area) AddInterface(c *InterfaceConfig) {
-	i := NewInterface(c)
+	i := NewInterface(a.ctx, c)
 	i.Area = a
 	a.Interfaces = append(a.Interfaces, i)
 }
 
 type Area struct {
+	ctx context.Context
+	wg  *sync.WaitGroup
+
+	ins     *Instance
+	Options packet.BitOption
+
 	// A 32-bit number identifying the area. The Area ID of 0.0.0.0 is
 	//        reserved for the backbone.
 	AreaId uint32
@@ -94,6 +107,21 @@ type Area struct {
 	SPF *SPFTree
 }
 
+func (a *Area) start() {
+	for _, ifi := range a.Interfaces {
+		ifi.start()
+	}
+}
+
+func (a *Area) shutdown() {
+	for _, ifi := range a.Interfaces {
+		if err := ifi.close(); err != nil {
+			logWarn("Interface %s close err: %v", ifi.c.ifi.Name, err)
+		}
+	}
+	a.wg.Wait()
+}
+
 type AreaAddress struct {
 	Address *net.IPNet
 	// Routing information is condensed at area boundaries.
@@ -105,340 +133,6 @@ type AreaAddress struct {
 	// networks to be intentionally hidden from other
 	// areas. Status is set to Advertise by default.
 	DoNotAdvertise bool
-}
-
-type InterfaceState uint8
-
-const (
-	// InterfaceDown This is the initial interface state.  In this state, the
-	//            lower-level protocols have indicated that the interface is
-	//            unusable.  No protocol traffic at all will be sent or
-	//            received on such a interface.  In this state, interface
-	//            parameters should be set to their initial values.  All
-	//            interface timers should be disabled, and there should be no
-	//            adjacencies associated with the interface.
-	InterfaceDown InterfaceState = iota
-	// InterfaceLoopBack In this state, the router's interface to the network is
-	//            looped back.  The interface may be looped back in hardware
-	//            or software.  The interface will be unavailable for regular
-	//            data traffic.  However, it may still be desirable to gain
-	//            information on the quality of this interface, either through
-	//            sending ICMP pings to the interface or through something
-	//            like a bit error test.  For this reason, IP packets may
-	//            still be addressed to an interface in Loopback state.  To
-	//            facilitate this, such interfaces are advertised in router-
-	//            LSAs as single host routes, whose destination is the IP
-	//            interface address.[4]
-	InterfaceLoopBack
-	// InterfaceWaiting In this state, the router is trying to determine the
-	//            identity of the (Backup) Designated Router for the network.
-	//            To do this, the router monitors the Hello Packets it
-	//            receives.  The router is not allowed to elect a Backup
-	//            Designated Router nor a Designated Router until it
-	//            transitions out of Waiting state.  This prevents unnecessary
-	//            changes of (Backup) Designated Router.
-	InterfaceWaiting
-	// InterfacePointToPoint In this state, the interface is operational, and connects
-	//            either to a physical point-to-point network or to a virtual
-	//            link.  Upon entering this state, the router attempts to form
-	//            an adjacency with the neighboring router.  Hello Packets are
-	//            sent to the neighbor every HelloInterval seconds.
-	InterfacePointToPoint
-	// InterfaceDROther The interface is to a broadcast or NBMA network on which
-	//            another router has been selected to be the Designated
-	//            Router.  In this state, the router itself has not been
-	//            selected Backup Designated Router either.  The router forms
-	//            adjacencies to both the Designated Router and the Backup
-	//            Designated Router (if they exist).
-	InterfaceDROther
-	// InterfaceBackup In this state, the router itself is the Backup Designated
-	//            Router on the attached network.  It will be promoted to
-	//            Designated Router when the present Designated Router fails.
-	//            The router establishes adjacencies to all other routers
-	//            attached to the network.  The Backup Designated Router
-	//            performs slightly different functions during the Flooding
-	//            Procedure, as compared to the Designated Router (see Section
-	//            13.3).  See Section 7.4 for more details on the functions
-	//            performed by the Backup Designated Router.
-	InterfaceBackup
-	// InterfaceDR In this state, this router itself is the Designated Router
-	//            on the attached network.  Adjacencies are established to all
-	//            other routers attached to the network.  The router must also
-	//            originate a network-LSA for the network node.  The network-
-	//            LSA will contain links to all routers (including the
-	//            Designated Router itself) attached to the network.  See
-	//            Section 7.3 for more details on the functions performed by
-	//            the Designated Router.
-	InterfaceDR
-)
-
-type InterfaceConfig struct {
-	Address            *net.IPNet
-	RouterPriority     uint8
-	HelloInterval      uint16
-	RouterDeadInterval uint32
-}
-
-func NewInterface(c *InterfaceConfig) *Interface {
-	return &Interface{
-		Address:            c.Address,
-		RouterPriority:     c.RouterPriority,
-		HelloInterval:      c.HelloInterval,
-		HelloTicker:        nil,
-		RouterDeadInterval: c.RouterDeadInterval,
-		WaitTimer:          nil,
-		OutputCost:         10,
-		RxmtInterval:       5,
-		InfTransDelay:      1,
-	}
-}
-
-type Interface struct {
-	// The OSPF interface type is either point-to-point, broadcast,
-	//        NBMA, Point-to-MultiPoint or virtual link.
-	// Not used yet.
-	Type string
-	// The functional level of an interface.  State determines whether
-	//        or not full adjacencies are allowed to form over the interface.
-	//        State is also reflected in the router's LSAs.
-	State InterfaceState
-	// The IP address associated with the interface.  This appears as
-	//        the IP source address in all routing protocol packets originated
-	//        over this interface.  Interfaces to unnumbered point-to-point
-	//        networks do not have an associated IP address.
-	// Also referred to as the subnet mask, this indicates the portion
-	//        of the IP interface address that identifies the attached
-	//        network.  Masking the IP interface address with the IP interface
-	//        mask yields the IP network number of the attached network.  On
-	//        point-to-point networks and virtual links, the IP interface mask
-	//        is not defined. On these networks, the link itself is not
-	//        assigned an IP network number, and so the addresses of each side
-	//        of the link are assigned independently, if they are assigned at
-	//        all.
-	Address *net.IPNet
-	// The Area ID of the area to which the attached network belongs.
-	//        All routing protocol packets originating from the interface are
-	//        labelled with this Area ID.
-	Area *Area
-
-	// An 8-bit unsigned integer.  When two routers attached to a
-	//        network both attempt to become Designated Router, the one with
-	//        the highest Router Priority takes precedence.  A router whose
-	//        Router Priority is set to 0 is ineligible to become Designated
-	//        Router on the attached network.  Advertised in Hello packets
-	//        sent out this interface.
-	RouterPriority uint8
-
-	// The length of time, in seconds, between the Hello packets that
-	//        the router sends on the interface.  Advertised in Hello packets
-	//        sent out this interface.
-	HelloInterval uint16
-	// An interval timer that causes the interface to send a Hello
-	//        packet.  This timer fires every HelloInterval seconds.  Note
-	//        that on non-broadcast networks a separate Hello packet is sent
-	//        to each qualified neighbor.
-	HelloTicker *time.Ticker
-	// The number of seconds before the router's neighbors will declare
-	//        it down, when they stop hearing the router's Hello Packets.
-	//        Advertised in Hello packets sent out this interface.
-	RouterDeadInterval uint32
-	// A single shot timer that causes the interface to exit the
-	//        Waiting state, and as a consequence select a Designated Router
-	//        on the network.  The length of the timer is RouterDeadInterval
-	//        seconds.
-	WaitTimer *time.Timer
-	// The Designated Router selected for the attached network.  The
-	//        Designated Router is selected on all broadcast and NBMA networks
-	//        by the Hello Protocol.  Two pieces of identification are kept
-	//        for the Designated Router: its Router ID and its IP interface
-	//        address on the network.  The Designated Router advertises link
-	//        state for the network; this network-LSA is labelled with the
-	//        Designated Router's IP address.  The Designated Router is
-	//        initialized to 0.0.0.0, which indicates the lack of a Designated
-	//        Router.
-	DR uint32
-	// The Backup Designated Router is also selected on all broadcast
-	//        and NBMA networks by the Hello Protocol.  All routers on the
-	//        attached network become adjacent to both the Designated Router
-	//        and the Backup Designated Router.  The Backup Designated Router
-	//        becomes Designated Router when the current Designated Router
-	//        fails.  The Backup Designated Router is initialized to 0.0.0.0,
-	//        indicating the lack of a Backup Designated Router.
-	BDR uint32
-
-	// The other routers attached to this network.  This list is formed
-	//        by the Hello Protocol.  Adjacencies will be formed to some of
-	//        these neighbors.  The set of adjacent neighbors can be
-	//        determined by an examination of all of the neighbors' states.
-	Neighbors []*Neighbor
-
-	// The cost of sending a packet on the interface, expressed in
-	//            the link state metric.  This is advertised as the link cost
-	//            for this interface in the router's router-LSA. The interface
-	//            output cost must always be greater than 0.
-	OutputCost int
-
-	// The number of seconds between LSA retransmissions, for
-	//            adjacencies belonging to this interface.  Also used when
-	//            retransmitting Database Description and Link State Request
-	//            Packets.  This should be well over the expected round-trip
-	//            delay between any two routers on the attached network.  The
-	//            setting of this value should be conservative or needless
-	//            retransmissions will result.  Sample value for a local area
-	//            network: 5 seconds.
-	RxmtInterval int
-
-	// The estimated number of seconds it takes to transmit a Link
-	//            State Update Packet over this interface.  LSAs contained in
-	//            the update packet must have their age incremented by this
-	//            amount before transmission.  This value should take into
-	//            account the transmission and propagation delays of the
-	//            interface.  It must be greater than 0.  Sample value for a
-	//            local area network: 1 second.
-	InfTransDelay int
-
-	// TODO
-	AuType string
-	// TODO
-	Authentication string
-}
-
-type NeighborState int
-
-const (
-	// NeighborDown This is the initial state of a neighbor conversation.  It
-	//            indicates that there has been no recent information received
-	//            from the neighbor.  On NBMA networks, Hello packets may
-	//            still be sent to "Down" neighbors, although at a reduced
-	//            frequency (see Section 9.5.1).
-	NeighborDown NeighborState = iota
-	// NeighborAttempt This state is only valid for neighbors attached to NBMA
-	//            networks.  It indicates that no recent information has been
-	//            received from the neighbor, but that a more concerted effort
-	//            should be made to contact the neighbor.  This is done by
-	//            sending the neighbor Hello packets at intervals of
-	//            HelloInterval (see Section 9.5.1).
-	NeighborAttempt
-	// NeighborInit In this state, an Hello packet has recently been seen from
-	//            the neighbor.  However, bidirectional communication has not
-	//            yet been established with the neighbor (i.e., the router
-	//            itself did not appear in the neighbor's Hello packet).  All
-	//            neighbors in this state (or higher) are listed in the Hello
-	//            packets sent from the associated interface.
-	NeighborInit
-	// Neighbor2Way In this state, communication between the two routers is
-	//            bidirectional.  This has been assured by the operation of
-	//            the Hello Protocol.  This is the most advanced state short
-	//            of beginning adjacency establishment.  The (Backup)
-	//            Designated Router is selected from the set of neighbors in
-	//            state 2-Way or greater.
-	Neighbor2Way
-	// NeighborExStart This is the first step in creating an adjacency between the
-	//            two neighboring routers.  The goal of this step is to decide
-	//            which router is the master, and to decide upon the initial
-	//            DD sequence number.  Neighbor conversations in this state or
-	//            greater are called adjacencies.
-	NeighborExStart
-	// NeighborExchange In this state the router is describing its entire link state
-	//            database by sending Database Description packets to the
-	//            neighbor.  Each Database Description Packet has a DD
-	//            sequence number, and is explicitly acknowledged.  Only one
-	//            Database Description Packet is allowed outstanding at any
-	//            one time.  In this state, Link State Request Packets may
-	//            also be sent asking for the neighbor's more recent LSAs.
-	//            All adjacencies in Exchange state or greater are used by the
-	//            flooding procedure.  In fact, these adjacencies are fully
-	//            capable of transmitting and receiving all types of OSPF
-	//            routing protocol packets.
-	NeighborExchange
-	// NeighborLoading In this state, Link State Request packets are sent to the
-	//            neighbor asking for the more recent LSAs that have been
-	//            discovered (but not yet received) in the Exchange state.
-	NeighborLoading
-	// NeighborFull In this state, the neighboring routers are fully adjacent.
-	//            These adjacencies will now appear in router-LSAs and
-	//            network-LSAs.
-	NeighborFull
-)
-
-type Neighbor struct {
-	// The functional level of the neighbor conversation.  This is
-	//        described in more detail in Section 10.1.
-	State NeighborState
-	// A single shot timer whose firing indicates that no Hello Packet
-	//        has been seen from this neighbor recently.  The length of the
-	//        timer is RouterDeadInterval seconds.
-	InactivityTimer *time.Timer
-	// When the two neighbors are exchanging databases, they form a
-	//        master/slave relationship.  The master sends the first Database
-	//        Description Packet, and is the only part that is allowed to
-	//        retransmit.  The slave can only respond to the master's Database
-	//        Description Packets.  The master/slave relationship is
-	//        negotiated in state ExStart.
-	IsMaster bool
-	// The DD Sequence number of the Database Description packet that
-	//        is currently being sent to the neighbor.
-	DDSeqNumber int
-
-	NeighborId uint32
-	// The Router Priority of the neighboring router.  Contained in the
-	//        neighbor's Hello packets, this item is used when selecting the
-	//        Designated Router for the attached network.
-	NeighborPriority uint8
-
-	// The IP address of the neighboring router's interface to the
-	//        attached network.  Used as the Destination IP address when
-	//        protocol packets are sent as unicasts along this adjacency.
-	//        Also used in router-LSAs as the Link ID for the attached network
-	//        if the neighboring router is selected to be Designated Router
-	//        (see Section 12.4.1).  The Neighbor IP address is learned when
-	//        Hello packets are received from the neighbor.  For virtual
-	//        links, the Neighbor IP address is learned during the routing
-	//        table build process (see Section 15).
-	NeighborAddress net.IP
-	// The optional OSPF capabilities supported by the neighbor.
-	//        Learned during the Database Exchange process (see Section 10.6).
-	//        The neighbor's optional OSPF capabilities are also listed in its
-	//        Hello packets.  This enables received Hello Packets to be
-	//        rejected (i.e., neighbor relationships will not even start to
-	//        form) if there is a mismatch in certain crucial OSPF
-	//        capabilities (see Section 10.5).  The optional OSPF capabilities
-	//        are documented in Section 4.5.
-	NeighborOptions CapOptions
-	// The neighbor's idea of the Designated Router.  If this is the
-	//        neighbor itself, this is important in the local calculation of
-	//        the Designated Router.  Defined only on broadcast and NBMA
-	//        networks.
-	NeighborsDR uint32
-	// The neighbor's idea of the Backup Designated Router.  If this is
-	//        the neighbor itself, this is important in the local calculation
-	//        of the Backup Designated Router.  Defined only on broadcast and
-	//        NBMA networks.
-	NeighborsBDR uint32
-
-	//    The next set of variables are lists of LSAs.  These lists describe
-	//    subsets of the area link-state database.  This memo defines five
-	//    distinct types of LSAs, all of which may be present in an area
-	//    link-state database: router-LSAs, network-LSAs, and Type 3 and 4
-	//    summary-LSAs (all stored in the area data structure), and AS-
-	//    external-LSAs (stored in the global data structure).
-
-	// The list of LSAs that have been flooded but not acknowledged on
-	//        this adjacency.  These will be retransmitted at intervals until
-	//        they are acknowledged, or until the adjacency is destroyed.
-	LSRetransmission []*packet.LSAdvertisement
-	// The complete list of LSAs that make up the area link-state
-	//        database, at the moment the neighbor goes into Database Exchange
-	//        state.  This list is sent to the neighbor in Database
-	//        Description packets.
-	DatabaseSummary []*packet.LSAheader
-	// The list of LSAs that need to be received from this neighbor in
-	//        order to synchronize the two neighbors' link-state databases.
-	//        This list is created as Database Description packets are
-	//        received, and is then sent to the neighbor in Link State Request
-	//        packets.  The list is depleted as appropriate Link State Update
-	//        packets are received.
-	LSRequest []*packet.LSReq
 }
 
 type SPFTree struct {

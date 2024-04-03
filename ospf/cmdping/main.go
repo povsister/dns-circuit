@@ -39,7 +39,7 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	rt.StartEcho()
+	//rt.StartEcho()
 
 	stopC := make(chan os.Signal)
 	go func() {

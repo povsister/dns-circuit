@@ -13,9 +13,12 @@ func ListenIPv4ByProtocol(ctx context.Context, protoNum int, addr string, modRc 
 	lc := &net.ListenConfig{
 		Control: func(network, address string, c syscall.RawConn) (err error) {
 			return c.Control(func(fd uintptr) {
-				//err = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_REUSEPORT, 1)
-				//if err != nil {
-				//	return
+				//switch runtime.GOOS {
+				//case "darwin", "linux":
+				//	err = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_REUSEPORT, 1)
+				//	if err != nil {
+				//		return
+				//	}
 				//}
 				//err = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_REUSEADDR, 1)
 			})
