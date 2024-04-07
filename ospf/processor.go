@@ -169,14 +169,13 @@ func (a *Area) procDatabaseDesc(i *Interface, h *ipv4.Header, dd *packet.OSPFv2P
 		// the neighbor structure's Neighbor Options field.
 		negotiationDone := func() {
 			neighbor.NeighborOptions = packet.BitOption(dd.Content.Options)
-			neighbor.saveLastReceivedDD(dd)
 			if neighbor.IsMaster {
 				// im slave. prepare for dd exchange
 				neighbor.consumeEvent(NbEvNegotiationDone)
 				neighbor.slavePrepareDDExchange()
 			} else {
 				// im master. must wait for slave echo for acknowledgement.
-				// then starting db exchange.
+				// then starting dd exchange.
 				neighbor.consumeEvent(NbEvNegotiationDone)
 				neighbor.masterStartDDExchange()
 			}

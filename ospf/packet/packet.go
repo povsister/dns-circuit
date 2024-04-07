@@ -16,6 +16,11 @@ type OSPFv2Packet[T OSPFPayloadV2] struct {
 	Content T //replace Content interface for marshaling
 }
 
+type SerializableLayerLayerWithType interface {
+	gopacket.SerializableLayer
+	GetType() layers.OSPFType
+}
+
 type OSPFPayloadV2 interface {
 	HelloPayloadV2 | DbDescPayload |
 		LSRequestPayload | LSUpdatePayload | LSAcknowledgementPayload
@@ -348,6 +353,10 @@ func ipPacketChecksum(bytes []byte) uint16 {
 	}
 	// Flip all the bits
 	return ^uint16(csum)
+}
+
+func (v2 *OSPFv2Packet[T]) GetType() layers.OSPFType {
+	return v2.Type
 }
 
 // SerializeTo writes the serialized form of this layer into the

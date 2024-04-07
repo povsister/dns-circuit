@@ -58,6 +58,10 @@ func (s *TSS[T]) Set(val T) {
 	atomic.StorePointer(&s.v, unsafe.Pointer(&val))
 }
 
-func (s *TSS[T]) Get() T {
-	return *(*T)(atomic.LoadPointer(&s.v))
+func (s *TSS[T]) Get() (ret T) {
+	vGet := (*T)(atomic.LoadPointer(&s.v))
+	if vGet == nil {
+		return
+	}
+	return *vGet
 }

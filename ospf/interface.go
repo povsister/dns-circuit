@@ -63,7 +63,7 @@ type recvPkt struct {
 
 type sendPkt struct {
 	dst uint32
-	p   gopacket.SerializableLayer // ospf msg
+	p   packet.SerializableLayerLayerWithType // ospf msg
 }
 
 type InterfaceState uint8
@@ -537,13 +537,16 @@ func (i *Interface) doSendPkt(pkt sendPkt) (err error) {
 		logErr("Interface %s err marshal pending send Packet: %v", i.c.ifi.Name, err)
 		return nil
 	}
+	dstIP := net.IPv4(byte(pkt.dst>>24), byte(pkt.dst>>16), byte(pkt.dst>>8), byte(pkt.dst))
 	n, err := i.c.WriteTo(p.Bytes(), &net.IPAddr{
-		IP: net.IPv4(byte(pkt.dst>>24), byte(pkt.dst>>16), byte(pkt.dst>>8), byte(pkt.dst)),
+		IP: dstIP,
 	})
 	if err != nil {
-		logErr("Interface %s err send Packet: %v", i.c.ifi.Name, err)
+		logErr("Interface %s err send %v Packet: %v", i.c.ifi.Name, pkt.p.GetType(), err)
 	} else {
-		logDebug("Interface %s sent Packets(%d): \n%+v\n", i.c.ifi.Name, n, pkt.p)
+		logDebug("Interface %s sent %s->%s %v Packets(%d): \n%+v\n", i.c.ifi.Name,
+			i.Address.IP.String(), dstIP.String(),
+			pkt.p.GetType(), n, pkt.p)
 	}
 	return
 }

@@ -3,6 +3,7 @@ package ospf
 import (
 	"math"
 	"net"
+	"strconv"
 	"sync/atomic"
 	"time"
 
@@ -68,6 +69,24 @@ const (
 	//            network-LSAs.
 	NeighborFull
 )
+
+var nbsName = map[NeighborState]string{
+	NeighborDown:     "Down",
+	NeighborAttempt:  "Attempt",
+	NeighborInit:     "Init",
+	Neighbor2Way:     "2-Way",
+	NeighborExStart:  "ExStart",
+	NeighborExchange: "ExChange",
+	NeighborLoading:  "Loading",
+	NeighborFull:     "Full",
+}
+
+func (ns NeighborState) String() string {
+	if name, ok := nbsName[ns]; ok {
+		return name
+	}
+	return strconv.FormatInt(int64(ns), 10)
+}
 
 type Neighbor struct {
 	lastSeen time.Time
@@ -190,6 +209,7 @@ func (n *Neighbor) transState(target NeighborState) {
 			n.InactivityTimer.Stop()
 		}
 	}
+	logDebug("Neighbor %v state change: %v -> %v", n.NeighborId, currState, target)
 	n.State = target
 }
 
@@ -420,7 +440,8 @@ func (n *Neighbor) startInactivityTimer() {
 func (n *Neighbor) startMasterNegotiation() {
 	ddSeqNum := n.DDSeqNumber.Load()
 	if ddSeqNum <= 0 {
-		n.DDSeqNumber.Store(randSource.Uint32N(math.MaxUint32 / 4))
+		ddSeqNum = randSource.Uint32N(math.MaxUint32 / 4)
+		n.DDSeqNumber.Store(ddSeqNum)
 	} else {
 		n.DDSeqNumber.Store(ddSeqNum + 1)
 	}
@@ -522,7 +543,7 @@ func (n *Neighbor) echoDDWithPossibleRetransmission(dd *packet.OSPFv2Packet[pack
 	})
 }
 
-func (n *Neighbor) sendDDExchange() {
+func (n *Neighbor) sendDDExchange(doNotIncr bool) {
 	if n.IsMaster {
 		// im slave. just return.
 		return
@@ -531,12 +552,14 @@ func (n *Neighbor) sendDDExchange() {
 	n.ddRetransmissionTicker.Stop()
 	// only master can incr the ddSeqNum
 	ddSeqNum := n.DDSeqNumber.Load()
-	ddSeqNum += 1
-	n.DDSeqNumber.Store(ddSeqNum)
+	if !doNotIncr {
+		ddSeqNum += 1
+		n.DDSeqNumber.Store(ddSeqNum)
+	}
 
 	var (
 		toSendLSAs []packet.LSAheader
-		moreBit    bool
+		moreBit    = len(n.DatabaseSummary) > 0
 	)
 	// simply one LSA per DD to avoid potential MTU issue.
 	if len(n.DatabaseSummary) >= 1 {
@@ -581,20 +604,34 @@ func (n *Neighbor) sendDDExchange() {
 	//    by echoing the DD sequence number or
 	// b) RxmtInterval seconds elapse without an acknowledgment, in which case the previous
 	//    Database Description packet is retransmitted.
-	n.negotiationRetransmissionTicker = TimeTickerFunc(n.i.ctx, time.Duration(n.i.RxmtInterval)*time.Second,
+	n.ddRetransmissionTicker = TimeTickerFunc(n.i.ctx, time.Duration(n.i.RxmtInterval)*time.Second,
 		func() { n.i.queuePktForSend(pkt) })
 }
 
+func (n *Neighbor) fillDatabaseSummary() {
+	n.DatabaseSummary = []packet.LSAheader{
+		{
+			LSAge:       10,
+			LSType:      513,
+			LinkStateID: ipv4BytesToUint32(n.i.Address.IP.To4()),
+			AdvRouter:   n.i.Area.ins.RouterId,
+			LSSeqNumber: InitialSequenceNumber,
+			LSOptions:   0,
+		},
+	}
+}
+
 func (n *Neighbor) masterStartDDExchange() {
-	// TODO: fill up the Database summary
-	n.sendDDExchange()
+	n.fillDatabaseSummary()
+	// do not incr seq number. ROS will send LSA in the first DD echo packet.
+	n.sendDDExchange(true)
 }
 
 func (n *Neighbor) masterContinueDDExchange(slaveMoreBitSet bool) (needAck bool) {
 	if len(n.DatabaseSummary) > 0 || slaveMoreBitSet {
 		// there are still some DD LSA waiting for send.
 		// or slave didn't finish DD send, polling for more.
-		n.sendDDExchange()
+		n.sendDDExchange(false)
 		return true
 	}
 	n.ddRetransmissionTicker.Stop()
@@ -602,8 +639,9 @@ func (n *Neighbor) masterContinueDDExchange(slaveMoreBitSet bool) (needAck bool)
 }
 
 func (n *Neighbor) slavePrepareDDExchange() {
-	// TODO: fill up the Database summary
-	// but do not send dd first. wait for master
+	n.fillDatabaseSummary()
+	// but do not send dd first.
+	// wait for master synchronize.
 }
 
 func (n *Neighbor) slaveDDEchoAndExchange(dd *packet.OSPFv2Packet[packet.DbDescPayload]) (allDDSent bool) {

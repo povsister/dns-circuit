@@ -1,6 +1,7 @@
 package ospf
 
 import (
+	"math"
 	"reflect"
 	"testing"
 
@@ -31,5 +32,11 @@ func TestTCS(t *testing.T) {
 	s.P.Set(&val)
 	if !reflect.DeepEqual(val, *s.P.Get()) {
 		t.Errorf("unexpected mismatch")
+	}
+}
+
+func TestRandSource(t *testing.T) {
+	for i := 0; i < 100; i++ {
+		t.Log(randSource.Uint32N(math.MaxUint32 / 4))
 	}
 }
