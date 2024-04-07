@@ -100,6 +100,7 @@ type Neighbor struct {
 	//        neighbor is a duplicate.
 	LastReceivedDDPacket       TSS[*packet.OSPFv2Packet[packet.DbDescPayload]]
 	lastReceivedDDInvalidTimer *time.Timer
+	lastSlaveDDSent            TSS[*packet.DbDescPayload] // slave echo with dd summary
 
 	NeighborId uint32
 	// The Router Priority of the neighboring router.  Contained in the
@@ -458,7 +459,10 @@ func (n *Neighbor) saveLastReceivedDD(dd *packet.OSPFv2Packet[packet.DbDescPaylo
 	invalidDur := time.Duration(n.i.RouterDeadInterval) * time.Second
 	if n.lastReceivedDDInvalidTimer == nil {
 		n.lastReceivedDDInvalidTimer = time.AfterFunc(invalidDur,
-			func() { n.LastReceivedDDPacket.Set(nil) })
+			func() {
+				n.LastReceivedDDPacket.Set(nil)
+				n.lastSlaveDDSent.Set(nil)
+			})
 	} else {
 		n.lastReceivedDDInvalidTimer.Reset(invalidDur)
 	}
@@ -475,12 +479,15 @@ func (n *Neighbor) isDuplicatedDD(dd *packet.OSPFv2Packet[packet.DbDescPayload])
 	return nil, false
 }
 
-func (n *Neighbor) parseDDFromMaster(dd *packet.OSPFv2Packet[packet.DbDescPayload]) {
+func (n *Neighbor) parseDD(dd *packet.OSPFv2Packet[packet.DbDescPayload]) {
+	if len(dd.Content.LSAinfo) <= 0 {
+		return
+	}
 	lsReq := n.i.Area.unknownLS(dd)
 	n.LSRequest = append(n.LSRequest, lsReq...)
 }
 
-func (n *Neighbor) echoDD(dd *packet.OSPFv2Packet[packet.DbDescPayload]) {
+func (n *Neighbor) echoDDWithPossibleRetransmission(dd *packet.OSPFv2Packet[packet.DbDescPayload]) {
 	echoDD := &packet.OSPFv2Packet[packet.DbDescPayload]{
 		OSPFv2: layers.OSPFv2{
 			OSPF: layers.OSPF{
@@ -490,18 +497,24 @@ func (n *Neighbor) echoDD(dd *packet.OSPFv2Packet[packet.DbDescPayload]) {
 				AreaID:   n.i.Area.AreaId,
 			},
 		},
-		Content: packet.DbDescPayload{
+	}
+	if lastDDEcho := n.lastSlaveDDSent.Get(); lastDDEcho != nil {
+		echoDD.Content = *lastDDEcho
+	} else {
+		echoDD.Content = packet.DbDescPayload{
 			DbDescPkg: layers.DbDescPkg{
 				Options:      uint32(n.i.Area.Options),
 				InterfaceMTU: n.i.MTU,
 				Flags: func() uint16 {
-					retFlag := packet.BitOption(dd.Content.Flags).
-						ClearBit(packet.DDOptionMSbit, packet.DDOptionIbit)
+					retFlag := packet.BitOption(0)
+					if len(n.DatabaseSummary) > 0 {
+						retFlag = retFlag.SetBit(packet.DDOptionMbit)
+					}
 					return uint16(retFlag)
 				}(),
 				DDSeqNumber: dd.Content.DDSeqNumber,
 			},
-		},
+		}
 	}
 	n.i.queuePktForSend(sendPkt{
 		dst: ipv4BytesToUint32(n.NeighborAddress.To4()),
@@ -577,13 +590,46 @@ func (n *Neighbor) masterStartDDExchange() {
 	n.sendDDExchange()
 }
 
-func (n *Neighbor) masterContinueDDExchange() (needAck bool) {
-	// no more dd left. just return
-	if len(n.DatabaseSummary) <= 0 {
-		n.ddRetransmissionTicker.Stop()
-		return false
+func (n *Neighbor) masterContinueDDExchange(slaveMoreBitSet bool) (needAck bool) {
+	if len(n.DatabaseSummary) > 0 || slaveMoreBitSet {
+		// there are still some DD LSA waiting for send.
+		// or slave didn't finish DD send, polling for more.
+		n.sendDDExchange()
+		return true
 	}
-	// there are still some DD LSA waiting for send
-	n.sendDDExchange()
-	return true
+	n.ddRetransmissionTicker.Stop()
+	return false
+}
+
+func (n *Neighbor) slavePrepareDDExchange() {
+	// TODO: fill up the Database summary
+	// but do not send dd first. wait for master
+}
+
+func (n *Neighbor) slaveDDEchoAndExchange(dd *packet.OSPFv2Packet[packet.DbDescPayload]) (allDDSent bool) {
+	if len(n.DatabaseSummary) >= 1 {
+		// simply one LSA per DD to avoid potential MTU issue.
+		toSendLSA := []packet.LSAheader{n.DatabaseSummary[0]}
+		n.DatabaseSummary = n.DatabaseSummary[1:]
+		allDDSent = len(n.DatabaseSummary) <= 0
+		n.lastSlaveDDSent.Set(&packet.DbDescPayload{
+			DbDescPkg: layers.DbDescPkg{
+				Options:      uint32(n.i.Area.Options),
+				InterfaceMTU: n.i.MTU,
+				Flags: func() uint16 {
+					retFlag := packet.BitOption(0)
+					if !allDDSent {
+						retFlag = retFlag.SetBit(packet.DDOptionMbit)
+					}
+					return uint16(retFlag)
+				}(),
+				DDSeqNumber: dd.Content.DDSeqNumber,
+			},
+			LSAinfo: toSendLSA,
+		})
+	} else {
+		allDDSent = true
+	}
+	n.echoDDWithPossibleRetransmission(dd)
+	return
 }

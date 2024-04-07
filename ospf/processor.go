@@ -171,8 +171,9 @@ func (a *Area) procDatabaseDesc(i *Interface, h *ipv4.Header, dd *packet.OSPFv2P
 			neighbor.NeighborOptions = packet.BitOption(dd.Content.Options)
 			neighbor.saveLastReceivedDD(dd)
 			if neighbor.IsMaster {
-				// im slave. all done here. transits to next state
+				// im slave. prepare for dd exchange
 				neighbor.consumeEvent(NbEvNegotiationDone)
+				neighbor.slavePrepareDDExchange()
 			} else {
 				// im master. must wait for slave echo for acknowledgement.
 				// then starting db exchange.
@@ -218,7 +219,7 @@ func (a *Area) procDatabaseDesc(i *Interface, h *ipv4.Header, dd *packet.OSPFv2P
 				return
 			}
 			// im slave. repeating last dd
-			neighbor.echoDD(lastDD)
+			neighbor.echoDDWithPossibleRetransmission(lastDD)
 			return
 		}
 		flags := packet.BitOption(dd.Content.Flags)
@@ -260,22 +261,28 @@ func (a *Area) procDatabaseDesc(i *Interface, h *ipv4.Header, dd *packet.OSPFv2P
 			neighbor.consumeEvent(NbEvSeqNumberMismatch)
 			return
 		}
-		// record last received dd packet
+		// record last accepted dd packet
 		neighbor.saveLastReceivedDD(dd)
 		if neighbor.IsMaster {
 			// im slave. save the dd seq number offered by master
 			neighbor.DDSeqNumber.Store(dd.Content.DDSeqNumber)
-			//  echo the dd then process it.
-			neighbor.echoDD(dd)
-			neighbor.parseDDFromMaster(dd)
-			if !packet.BitOption(dd.Content.Flags).IsBitSet(packet.DDOptionMbit) {
-				// no more DD packets from master. This marks dd exchange done.
+			// echo the dd from master and send dd of my own.
+			// then process the dd from master
+			allDDSent := neighbor.slaveDDEchoAndExchange(dd)
+			neighbor.parseDD(dd)
+			if !packet.BitOption(dd.Content.Flags).IsBitSet(packet.DDOptionMbit) && allDDSent {
+				// no more DD packets from master.
+				// and all local dd has been sent.
+				// This marks dd exchange done.
 				neighbor.consumeEvent(NbEvExchangeDone)
 			}
 		} else {
-			// im master. this is a dd echo packet. try continue sending dd
-			if needWaitForAck := neighbor.masterContinueDDExchange(); !needWaitForAck {
-				// no dd echo need(no dd packet has been sent).
+			// im master. this is a dd echo packet with summary.
+			// parse it and try continue sending next dd
+			neighbor.parseDD(dd)
+			if needWaitForAck := neighbor.masterContinueDDExchange(packet.BitOption(dd.Content.Flags).
+				IsBitSet(packet.DDOptionMbit)); !needWaitForAck {
+				// no dd echo need(no dd packet has been sent or slave has finished DD, too).
 				// indicating it is the last dd packet echo.
 				// This marks the end of dd packet send process.
 				neighbor.consumeEvent(NbEvExchangeDone)
@@ -299,7 +306,7 @@ func (a *Area) procDatabaseDesc(i *Interface, h *ipv4.Header, dd *packet.OSPFv2P
 			// duplicated packets received.
 			if neighbor.IsMaster {
 				// im slave, repeating last dd
-				neighbor.echoDD(lastDD)
+				neighbor.echoDDWithPossibleRetransmission(lastDD)
 			}
 		} else {
 			// non-duplicated packets
