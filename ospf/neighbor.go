@@ -544,7 +544,7 @@ func (n *Neighbor) echoDDWithPossibleRetransmission(dd *packet.OSPFv2Packet[pack
 	})
 }
 
-func (n *Neighbor) sendDDExchange(doNotIncr bool) {
+func (n *Neighbor) sendDDExchange() {
 	if n.IsMaster {
 		// im slave. just return.
 		return
@@ -553,10 +553,8 @@ func (n *Neighbor) sendDDExchange(doNotIncr bool) {
 	n.ddRetransmissionTicker.Stop()
 	// only master can incr the ddSeqNum
 	ddSeqNum := n.DDSeqNumber.Load()
-	if !doNotIncr {
-		ddSeqNum += 1
-		n.DDSeqNumber.Store(ddSeqNum)
-	}
+	ddSeqNum += 1
+	n.DDSeqNumber.Store(ddSeqNum)
 
 	var (
 		toSendLSAs []packet.LSAheader
@@ -622,17 +620,18 @@ func (n *Neighbor) fillDatabaseSummary() {
 	}
 }
 
-func (n *Neighbor) masterStartDDExchange() {
+func (n *Neighbor) masterStartDDExchange(dd *packet.OSPFv2Packet[packet.DbDescPayload]) {
 	n.fillDatabaseSummary()
-	// do not incr seq number. ROS will send LSA in the first DD echo packet.
-	n.sendDDExchange(true)
+	// for some reason, ROS will send LSA in the first DD echo packet.
+	n.parseDD(dd)
+	n.sendDDExchange()
 }
 
 func (n *Neighbor) masterContinueDDExchange(slaveMoreBitSet bool) (needAck bool) {
 	if len(n.DatabaseSummary) > 0 || slaveMoreBitSet {
 		// there are still some DD LSA waiting for send.
 		// or slave didn't finish DD send, polling for more.
-		n.sendDDExchange(false)
+		n.sendDDExchange()
 		return true
 	}
 	n.ddRetransmissionTicker.Stop()
@@ -642,7 +641,7 @@ func (n *Neighbor) masterContinueDDExchange(slaveMoreBitSet bool) (needAck bool)
 func (n *Neighbor) slavePrepareDDExchange() {
 	n.fillDatabaseSummary()
 	// but do not send dd first.
-	// wait for master synchronize.
+	// Wait for master for dd sync.
 }
 
 func (n *Neighbor) slaveDDEchoAndExchange(dd *packet.OSPFv2Packet[packet.DbDescPayload]) (allDDSent bool) {

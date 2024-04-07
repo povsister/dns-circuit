@@ -79,6 +79,9 @@ func (a *Area) procHello(i *Interface, h *ipv4.Header, hello *packet.OSPFv2Packe
 			}
 		}
 		if isMySelfSeen {
+			// just some handy addon
+			i.DR = neighbor.NeighborsDR
+			i.BDR = neighbor.NeighborsBDR
 			// If the router itself appears in this list, the
 			// neighbor state machine should be executed with the event 2-WayReceived.
 			neighbor.consumeEvent(NbEv2WayReceived)
@@ -169,6 +172,7 @@ func (a *Area) procDatabaseDesc(i *Interface, h *ipv4.Header, dd *packet.OSPFv2P
 		// the neighbor structure's Neighbor Options field.
 		negotiationDone := func() {
 			neighbor.NeighborOptions = packet.BitOption(dd.Content.Options)
+			neighbor.saveLastReceivedDD(dd)
 			if neighbor.IsMaster {
 				// im slave. prepare for dd exchange
 				neighbor.consumeEvent(NbEvNegotiationDone)
@@ -179,7 +183,7 @@ func (a *Area) procDatabaseDesc(i *Interface, h *ipv4.Header, dd *packet.OSPFv2P
 				// then starting dd exchange.
 				neighbor.consumeEvent(NbEvNegotiationDone)
 				logDebug("Sending out first DD exchange")
-				neighbor.masterStartDDExchange()
+				neighbor.masterStartDDExchange(dd)
 			}
 		}
 		flags := packet.BitOption(dd.Content.Flags)
@@ -192,7 +196,7 @@ func (a *Area) procDatabaseDesc(i *Interface, h *ipv4.Header, dd *packet.OSPFv2P
 			// the router is now Slave.  Set the master/slave bit to
 			// slave, and set the neighbor data structure's DD sequence
 			// number to that specified by the master.
-			logDebug("ExStart negotiation: i am slave")
+			logDebug("ExStart negotiation result: I am slave")
 			neighbor.IsMaster = true
 			neighbor.DDSeqNumber.Store(dd.Content.DDSeqNumber)
 			negotiationDone()
@@ -204,7 +208,7 @@ func (a *Area) procDatabaseDesc(i *Interface, h *ipv4.Header, dd *packet.OSPFv2P
 			// acknowledgment) and the neighbor's Router ID is smaller
 			// than the router's own.  In this case the router is
 			// Master.
-			logDebug("ExStart negotiation: i am master")
+			logDebug("ExStart negotiation result: I am master")
 			neighbor.IsMaster = false
 			negotiationDone()
 		} else {
@@ -213,7 +217,7 @@ func (a *Area) procDatabaseDesc(i *Interface, h *ipv4.Header, dd *packet.OSPFv2P
 		}
 		// The packet should be accepted as next in sequence and processed
 		// further (see below).
-		//fallthrough
+		fallthrough
 	case NeighborExchange:
 		// check if packet is duplicated
 		if lastDD, isDup := neighbor.isDuplicatedDD(dd); isDup {
@@ -221,7 +225,8 @@ func (a *Area) procDatabaseDesc(i *Interface, h *ipv4.Header, dd *packet.OSPFv2P
 				// im master. silently discard duplicated packets
 				return
 			}
-			// im slave. repeating last dd
+			// im slave. repeating last dd.
+			// This also ack the master state.
 			neighbor.echoDDWithPossibleRetransmission(lastDD)
 			return
 		}
