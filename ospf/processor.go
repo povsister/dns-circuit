@@ -50,7 +50,7 @@ func (i *Interface) doParsedMsgProcessing(h *ipv4.Header, op *packet.LayerOSPFv2
 }
 
 func (a *Area) procHello(i *Interface, h *ipv4.Header, hello *packet.OSPFv2Packet[packet.HelloPayloadV2]) {
-	logDebug("Got OSPFv%d %s\nRouterId: %v AreaId:%v\n%+v\n",
+	logDebug("Got OSPFv%d %s\nRouterId: %v AreaId:%v\n%+v",
 		hello.Version, hello.Type, hello.RouterID, hello.AreaID, hello.Content)
 
 	// pre-checks
@@ -131,7 +131,7 @@ func (a *Area) procHello(i *Interface, h *ipv4.Header, hello *packet.OSPFv2Packe
 }
 
 func (a *Area) procDatabaseDesc(i *Interface, h *ipv4.Header, dd *packet.OSPFv2Packet[packet.DbDescPayload]) {
-	logDebug("Got OSPFv%d %s\nRouterId: %v AreaId: %v\n%+v\n", dd.Version, dd.Type, dd.RouterID, dd.AreaID,
+	logDebug("Got OSPFv%d %s\nRouterId: %v AreaId: %v\n%+v", dd.Version, dd.Type, dd.RouterID, dd.AreaID,
 		dd.Content)
 
 	neighborId := dd.RouterID

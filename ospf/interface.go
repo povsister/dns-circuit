@@ -544,7 +544,7 @@ func (i *Interface) doSendPkt(pkt sendPkt) (err error) {
 	if err != nil {
 		logErr("Interface %s err send %v Packet: %v", i.c.ifi.Name, pkt.p.GetType(), err)
 	} else {
-		logDebug("Interface %s sent %s->%s %v Packets(%d): \n%+v\n", i.c.ifi.Name,
+		logDebug("Interface %s sent %s->%s %v Packets(%d): \n%+v", i.c.ifi.Name,
 			i.Address.IP.String(), dstIP.String(),
 			pkt.p.GetType(), n, pkt.p)
 	}
