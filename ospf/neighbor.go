@@ -443,7 +443,8 @@ func (n *Neighbor) startMasterNegotiation() {
 		ddSeqNum = randSource.Uint32N(math.MaxUint32 / 4)
 		n.DDSeqNumber.Store(ddSeqNum)
 	} else {
-		n.DDSeqNumber.Store(ddSeqNum + 1)
+		ddSeqNum += 1
+		n.DDSeqNumber.Store(ddSeqNum)
 	}
 	dd := &packet.OSPFv2Packet[packet.DbDescPayload]{
 		OSPFv2: layers.OSPFv2{
@@ -559,7 +560,7 @@ func (n *Neighbor) sendDDExchange(doNotIncr bool) {
 
 	var (
 		toSendLSAs []packet.LSAheader
-		moreBit    = len(n.DatabaseSummary) > 0
+		moreBit    = false
 	)
 	// simply one LSA per DD to avoid potential MTU issue.
 	if len(n.DatabaseSummary) >= 1 {
