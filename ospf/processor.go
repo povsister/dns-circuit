@@ -50,8 +50,8 @@ func (i *Interface) doParsedMsgProcessing(h *ipv4.Header, op *packet.LayerOSPFv2
 }
 
 func (a *Area) procHello(i *Interface, h *ipv4.Header, hello *packet.OSPFv2Packet[packet.HelloPayloadV2]) {
-	logDebug("Got OSPFv%d %s\nRouterId: %v AreaId:%v\n%+v",
-		hello.Version, hello.Type, hello.RouterID, hello.AreaID, hello.Content)
+	logDebug("Got OSPFv%d %s(%d)\nRouterId: %v AreaId:%v\n%+v",
+		hello.Version, hello.Type, hello.PacketLength, hello.RouterID, hello.AreaID, hello.Content)
 
 	// pre-checks
 	if hello.Content.HelloInterval != i.HelloInterval || hello.Content.RouterDeadInterval != i.RouterDeadInterval ||
@@ -134,8 +134,8 @@ func (a *Area) procHello(i *Interface, h *ipv4.Header, hello *packet.OSPFv2Packe
 }
 
 func (a *Area) procDatabaseDesc(i *Interface, h *ipv4.Header, dd *packet.OSPFv2Packet[packet.DbDescPayload]) {
-	logDebug("Got OSPFv%d %s\nRouterId: %v AreaId: %v\n%+v", dd.Version, dd.Type, dd.RouterID, dd.AreaID,
-		dd.Content)
+	logDebug("Got OSPFv%d %s(%d)\nRouterId: %v AreaId: %v\n%+v", dd.Version, dd.Type, dd.PacketLength,
+		dd.RouterID, dd.AreaID, dd.Content)
 
 	neighborId := dd.RouterID
 	neighbor, ok := i.getNeighbor(neighborId)
@@ -177,10 +177,10 @@ func (a *Area) procDatabaseDesc(i *Interface, h *ipv4.Header, dd *packet.OSPFv2P
 				// im slave. prepare for dd exchange
 				neighbor.consumeEvent(NbEvNegotiationDone)
 				logDebug("Wait for first master sync")
+				// note that the dd echo is sent by fallthrough statement
 				neighbor.slavePrepareDDExchange()
 			} else {
-				// im master. must wait for slave echo for acknowledgement.
-				// then starting dd exchange.
+				// im master. starting dd exchange.
 				neighbor.consumeEvent(NbEvNegotiationDone)
 				logDebug("Sending out first DD exchange")
 				neighbor.masterStartDDExchange(dd)
@@ -327,13 +327,18 @@ func (a *Area) procDatabaseDesc(i *Interface, h *ipv4.Header, dd *packet.OSPFv2P
 }
 
 func (a *Area) procLSR(i *Interface, h *ipv4.Header, lsr *packet.OSPFv2Packet[packet.LSRequestPayload]) {
-
+	logDebug("Got OSPFv%d %s(%d)\nRouterId: %v AreaId: %v\n%+v", lsr.Version, lsr.Type, lsr.PacketLength,
+		lsr.RouterID, lsr.AreaID, lsr.Content)
 }
 
 func (a *Area) procLSU(i *Interface, h *ipv4.Header, lsu *packet.OSPFv2Packet[packet.LSUpdatePayload]) {
+	logDebug("Got OSPFv%d %s(%d)\nRouterId: %v AreaId: %v\n%+v", lsu.Version, lsu.Type, lsu.PacketLength,
+		lsu.RouterID, lsu.AreaID, lsu.Content)
 
 }
 
 func (a *Area) procLSAck(i *Interface, h *ipv4.Header, lsack *packet.OSPFv2Packet[packet.LSAcknowledgementPayload]) {
+	logDebug("Got OSPFv%d %s(%d)\nRouterId: %v AreaId: %v\n%+v", lsack.Version, lsack.Type, lsack.PacketLength,
+		lsack.RouterID, lsack.AreaID, lsack.Content)
 
 }
