@@ -47,9 +47,6 @@ func (i *Interface) queuePktForSend(pkt sendPkt) {
 }
 
 func (i *Interface) doHello() (err error) {
-	i.nbMu.RLock()
-	defer i.nbMu.RUnlock()
-
 	hello := &packet.OSPFv2Packet[packet.HelloPayloadV2]{
 		OSPFv2: layers.OSPFv2{
 			OSPF: layers.OSPF{
@@ -71,9 +68,11 @@ func (i *Interface) doHello() (err error) {
 			NetworkMask: binary.BigEndian.Uint32(i.Address.Mask),
 		},
 	}
+	i.nbMu.RLock()
 	for _, nb := range i.Neighbors {
 		hello.Content.NeighborID = append(hello.Content.NeighborID, nb.NeighborId)
 	}
+	i.nbMu.RUnlock()
 	p := gopacket.NewSerializeBuffer()
 	err = gopacket.SerializeLayers(p, gopacket.SerializeOptions{
 		FixLengths:       true,

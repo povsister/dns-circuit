@@ -5,7 +5,15 @@ type BitOption uint8
 func (b BitOption) SetBit(bits ...uint8) BitOption {
 	ret := b
 	for _, bit := range bits {
-		ret = ret | 1<<bit
+		ret = ret | (1 << bit)
+	}
+	return ret
+}
+
+func (b BitOption) ClearBit(bits ...uint8) BitOption {
+	ret := b
+	for _, bit := range bits {
+		ret = ret & ^(1 << bit)
 	}
 	return ret
 }

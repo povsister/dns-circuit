@@ -3,6 +3,7 @@ package ospf
 import (
 	"math"
 	"net"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/gopacket/layers"
@@ -85,17 +86,20 @@ type Neighbor struct {
 	//        retransmit.  The slave can only respond to the master's Database
 	//        Description Packets.  The master/slave relationship is
 	//        negotiated in state ExStart.
-	IsMaster bool
+	IsMaster                        bool
+	negotiationRetransmissionTicker *TickerFunc
+	ddRetransmissionTicker          *TickerFunc
 	// The DD Sequence number of the Database Description packet that
 	//        is currently being sent to the neighbor.
-	DDSeqNumber uint32
+	DDSeqNumber atomic.Uint32
 
 	// The initialize(I), more (M) and master(MS) bits, Options field,
 	//        and DD sequence number contained in the last Database
 	//        Description packet received from the neighbor. Used to determine
 	//        whether the next Database Description packet received from the
 	//        neighbor is a duplicate.
-	LastReceivedDDPacket *packet.OSPFv2Packet[packet.DbDescPayload]
+	LastReceivedDDPacket       TSS[*packet.OSPFv2Packet[packet.DbDescPayload]]
+	lastReceivedDDInvalidTimer *time.Timer
 
 	NeighborId uint32
 	// The Router Priority of the neighboring router.  Contained in the
@@ -148,14 +152,14 @@ type Neighbor struct {
 	//        database, at the moment the neighbor goes into Database Exchange
 	//        state.  This list is sent to the neighbor in Database
 	//        Description packets.
-	DatabaseSummary []*packet.LSAheader
+	DatabaseSummary []packet.LSAheader
 	// The list of LSAs that need to be received from this neighbor in
 	//        order to synchronize the two neighbors' link-state databases.
 	//        This list is created as Database Description packets are
 	//        received, and is then sent to the neighbor in Link State Request
 	//        packets.  The list is depleted as appropriate Link State Update
 	//        packets are received.
-	LSRequest []*packet.LSReq
+	LSRequest []packet.LSReq
 }
 
 func (n *Neighbor) currState() NeighborState {
@@ -163,6 +167,28 @@ func (n *Neighbor) currState() NeighborState {
 }
 
 func (n *Neighbor) transState(target NeighborState) {
+	var (
+		currState    = n.State
+		stateChanged = currState != target
+	)
+	// recycle previous state
+	switch currState {
+	case NeighborExStart:
+		if stateChanged {
+			n.negotiationRetransmissionTicker.Stop()
+		}
+	case NeighborExchange:
+		if stateChanged {
+			n.ddRetransmissionTicker.Stop()
+		}
+	}
+	// check dst state
+	switch target {
+	case NeighborDown:
+		if n.InactivityTimer != nil {
+			n.InactivityTimer.Stop()
+		}
+	}
 	n.State = target
 }
 
@@ -271,7 +297,7 @@ func (n *Neighbor) consumeEvent(e NeighborStateChangingEvent) {
 			// Otherwise (an adjacency should be established) the neighbor state transitions to ExStart.
 			if n.shouldFormAdjacency() {
 				n.transState(NeighborExStart)
-				//n.startMasterNegotiation()
+				n.startMasterNegotiation()
 			} else {
 				n.transState(Neighbor2Way)
 			}
@@ -279,7 +305,6 @@ func (n *Neighbor) consumeEvent(e NeighborStateChangingEvent) {
 	case NbEvNegotiationDone:
 		if n.currState() == NeighborExStart {
 			n.transState(NeighborExchange)
-			n.startExchange()
 		}
 	case NbEvExchangeDone:
 		if n.currState() == NeighborExchange {
@@ -294,6 +319,11 @@ func (n *Neighbor) consumeEvent(e NeighborStateChangingEvent) {
 			//                    discovered but not yet received in the Exchange
 			//                    state).  These LSAs are listed in the Link state
 			//                    request list associated with the neighbor.
+			if len(n.LSRequest) <= 0 {
+				n.transState(NeighborFull)
+			} else {
+				n.transState(NeighborLoading)
+			}
 		}
 	case NbEvLoadingDone:
 		if n.currState() == NeighborLoading {
@@ -334,6 +364,10 @@ func (n *Neighbor) consumeEvent(e NeighborStateChangingEvent) {
 			//                    initialize (I), more (M) and master (MS) bits set.
 			//                    This Database Description Packet should be otherwise
 			//                    empty (see Section 10.8).
+			clear(n.LSRetransmission)
+			clear(n.LSRequest)
+			clear(n.DatabaseSummary)
+			n.startMasterNegotiation()
 		}
 	case NbEvBadLSReq:
 		if n.currState() >= NeighborExchange {
@@ -358,6 +392,7 @@ func (n *Neighbor) consumeEvent(e NeighborStateChangingEvent) {
 		//                    LSAs.  Also, the Inactivity Timer is disabled.
 	case NbEvInactivityTimer:
 		n.transState(NeighborDown)
+		n.i.removeNeighbor(n)
 		// The Link state retransmission list, Database summary
 		//                    list and Link state request list are cleared of
 		//                    LSAs.
@@ -375,17 +410,19 @@ func (n *Neighbor) startInactivityTimer() {
 	inactiveDur := time.Duration(n.i.RouterDeadInterval) * time.Second
 	if n.InactivityTimer == nil {
 		n.InactivityTimer = time.AfterFunc(inactiveDur,
-			func() {
-				n.consumeEvent(NbEvInactivityTimer)
-				n.i.removeNeighbor(n)
-			})
+			func() { n.consumeEvent(NbEvInactivityTimer) })
 	} else {
 		n.InactivityTimer.Reset(inactiveDur)
 	}
 }
 
 func (n *Neighbor) startMasterNegotiation() {
-	n.DDSeqNumber = randSource.Uint32N(math.MaxUint32 / 2)
+	ddSeqNum := n.DDSeqNumber.Load()
+	if ddSeqNum <= 0 {
+		n.DDSeqNumber.Store(randSource.Uint32N(math.MaxUint32 / 4))
+	} else {
+		n.DDSeqNumber.Store(ddSeqNum + 1)
+	}
 	dd := &packet.OSPFv2Packet[packet.DbDescPayload]{
 		OSPFv2: layers.OSPFv2{
 			OSPF: layers.OSPF{
@@ -398,20 +435,155 @@ func (n *Neighbor) startMasterNegotiation() {
 		Content: packet.DbDescPayload{
 			DbDescPkg: layers.DbDescPkg{
 				Options:      uint32(n.i.Area.Options),
-				InterfaceMTU: 1500,
+				InterfaceMTU: n.i.MTU,
 				Flags: uint16(packet.BitOption(0).SetBit(packet.DDOptionMSbit,
 					packet.DDOptionIbit, packet.DDOptionMbit)),
-				DDSeqNumber: n.DDSeqNumber,
+				DDSeqNumber: ddSeqNum,
 			},
 		},
 	}
-	// TODO: retransmitted at intervals of RxmtInterval until the next state is entered
-	n.i.queuePktForSend(sendPkt{
-		dst: allSPFRouters,
+
+	pkt := sendPkt{
+		dst: ipv4BytesToUint32(n.NeighborAddress.To4()),
 		p:   dd,
+	}
+
+	n.negotiationRetransmissionTicker.Stop()
+	// retransmitted at intervals of RxmtInterval until the next state is entered
+	n.negotiationRetransmissionTicker = TimeTickerFunc(n.i.ctx, time.Duration(n.i.RxmtInterval)*time.Second,
+		func() { n.i.queuePktForSend(pkt) })
+}
+
+func (n *Neighbor) saveLastReceivedDD(dd *packet.OSPFv2Packet[packet.DbDescPayload]) {
+	invalidDur := time.Duration(n.i.RouterDeadInterval) * time.Second
+	if n.lastReceivedDDInvalidTimer == nil {
+		n.lastReceivedDDInvalidTimer = time.AfterFunc(invalidDur,
+			func() { n.LastReceivedDDPacket.Set(nil) })
+	} else {
+		n.lastReceivedDDInvalidTimer.Reset(invalidDur)
+	}
+	n.LastReceivedDDPacket.Set(dd)
+}
+
+func (n *Neighbor) isDuplicatedDD(dd *packet.OSPFv2Packet[packet.DbDescPayload]) (*packet.OSPFv2Packet[packet.DbDescPayload], bool) {
+	lastDD := n.LastReceivedDDPacket.Get()
+	if lastDD != nil && lastDD.Content.Flags == dd.Content.Flags &&
+		lastDD.Content.Options == dd.Content.Options &&
+		lastDD.Content.DDSeqNumber == dd.Content.DDSeqNumber {
+		return lastDD, true
+	}
+	return nil, false
+}
+
+func (n *Neighbor) parseDDFromMaster(dd *packet.OSPFv2Packet[packet.DbDescPayload]) {
+	lsReq := n.i.Area.unknownLS(dd)
+	n.LSRequest = append(n.LSRequest, lsReq...)
+}
+
+func (n *Neighbor) echoDD(dd *packet.OSPFv2Packet[packet.DbDescPayload]) {
+	echoDD := &packet.OSPFv2Packet[packet.DbDescPayload]{
+		OSPFv2: layers.OSPFv2{
+			OSPF: layers.OSPF{
+				Version:  2,
+				Type:     layers.OSPFDatabaseDescription,
+				RouterID: n.i.Area.ins.RouterId,
+				AreaID:   n.i.Area.AreaId,
+			},
+		},
+		Content: packet.DbDescPayload{
+			DbDescPkg: layers.DbDescPkg{
+				Options:      uint32(n.i.Area.Options),
+				InterfaceMTU: n.i.MTU,
+				Flags: func() uint16 {
+					retFlag := packet.BitOption(dd.Content.Flags).
+						ClearBit(packet.DDOptionMSbit, packet.DDOptionIbit)
+					return uint16(retFlag)
+				}(),
+				DDSeqNumber: dd.Content.DDSeqNumber,
+			},
+		},
+	}
+	n.i.queuePktForSend(sendPkt{
+		dst: ipv4BytesToUint32(n.NeighborAddress.To4()),
+		p:   echoDD,
 	})
 }
 
-func (n *Neighbor) startExchange() {
+func (n *Neighbor) sendDDExchange() {
+	if n.IsMaster {
+		// im slave. just return.
+		return
+	}
+	// im master
+	n.ddRetransmissionTicker.Stop()
+	// only master can incr the ddSeqNum
+	ddSeqNum := n.DDSeqNumber.Load()
+	ddSeqNum += 1
+	n.DDSeqNumber.Store(ddSeqNum)
 
+	var (
+		toSendLSAs []packet.LSAheader
+		moreBit    bool
+	)
+	// simply one LSA per DD to avoid potential MTU issue.
+	if len(n.DatabaseSummary) >= 1 {
+		toSendLSAs = append(toSendLSAs, n.DatabaseSummary[0])
+		n.DatabaseSummary = n.DatabaseSummary[1:]
+		if len(n.DatabaseSummary) > 0 {
+			moreBit = true
+		}
+	}
+	dd := &packet.OSPFv2Packet[packet.DbDescPayload]{
+		OSPFv2: layers.OSPFv2{
+			OSPF: layers.OSPF{
+				Version:  2,
+				Type:     layers.OSPFDatabaseDescription,
+				RouterID: n.i.Area.ins.RouterId,
+				AreaID:   n.i.Area.AreaId,
+			},
+		},
+		Content: packet.DbDescPayload{
+			DbDescPkg: layers.DbDescPkg{
+				Options:      uint32(n.i.Area.Options),
+				InterfaceMTU: n.i.MTU,
+				Flags: func() uint16 {
+					ret := packet.BitOption(0).SetBit(packet.DDOptionMSbit)
+					if moreBit {
+						ret = ret.SetBit(packet.DDOptionMbit)
+					}
+					return uint16(ret)
+				}(),
+				DDSeqNumber: ddSeqNum,
+			},
+			LSAinfo: toSendLSAs,
+		},
+	}
+
+	pkt := sendPkt{
+		dst: ipv4BytesToUint32(n.NeighborAddress.To4()),
+		p:   dd,
+	}
+	// Database Description packets are sent when either
+	// a) the slave acknowledges the previous Database Description packet
+	//    by echoing the DD sequence number or
+	// b) RxmtInterval seconds elapse without an acknowledgment, in which case the previous
+	//    Database Description packet is retransmitted.
+	n.negotiationRetransmissionTicker = TimeTickerFunc(n.i.ctx, time.Duration(n.i.RxmtInterval)*time.Second,
+		func() { n.i.queuePktForSend(pkt) })
+}
+
+func (n *Neighbor) masterStartDDExchange() {
+	// TODO: fill up the Database summary
+	n.sendDDExchange()
+}
+
+func (n *Neighbor) masterContinueDDExchange() (needAck bool) {
+	// no more dd left. just return
+	if len(n.DatabaseSummary) <= 0 {
+		n.ddRetransmissionTicker.Stop()
+		return false
+	}
+	// there are still some DD LSA waiting for send
+	n.sendDDExchange()
+	return true
 }

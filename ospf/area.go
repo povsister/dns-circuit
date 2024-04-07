@@ -135,5 +135,10 @@ type AreaAddress struct {
 	DoNotAdvertise bool
 }
 
+func (a *Area) unknownLS(dd *packet.OSPFv2Packet[packet.DbDescPayload]) []packet.LSReq {
+	// TODO: compare dd and local link state db.
+	return nil
+}
+
 type SPFTree struct {
 }

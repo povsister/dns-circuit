@@ -33,13 +33,15 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) *Interface {
 		panic(fmt.Errorf("can not bind OSPFv2 multicast conn: %w", err))
 	}
 	ctx, cancel := context.WithCancel(ctx)
-	return &Interface{
+	ret := &Interface{
 		ctx:                ctx,
 		cancel:             cancel,
 		c:                  conn,
 		wg:                 &sync.WaitGroup{},
 		pendingProcessPkt:  make(chan recvPkt, 20),
 		pendingSendPkt:     make(chan sendPkt, 20),
+		Type:               IfTypeBroadcast,
+		MTU:                1500,
 		Address:            c.Address,
 		RouterPriority:     c.RouterPriority,
 		HelloInterval:      c.HelloInterval,
@@ -50,6 +52,8 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) *Interface {
 		InfTransDelay:      1,
 		nbMu:               &sync.RWMutex{},
 	}
+	ret.consumeEvent(IfEvInterfaceUp)
+	return ret
 }
 
 type recvPkt struct {
@@ -127,6 +131,88 @@ const (
 	InterfaceDR
 )
 
+type InterfaceStateChangingEvent int
+
+const (
+	_ InterfaceStateChangingEvent = iota
+	// IfEvInterfaceUp Lower-level protocols have indicated that the network
+	//            interface is operational.  This enables the interface to
+	//            transition out of Down state.  On virtual links, the
+	//            interface operational indication is actually a result of the
+	//            shortest path calculation (see Section 16.7).
+	IfEvInterfaceUp
+	// IfEvWaitTimer The Wait Timer has fired, indicating the end of the waiting
+	//            period that is required before electing a (Backup)
+	//            Designated Router.
+	IfEvWaitTimer
+	// IfEvBackupSeen The router has detected the existence or non-existence of a
+	//            Backup Designated Router for the network.  This is done in
+	//            one of two ways.  First, an Hello Packet may be received
+	//            from a neighbor claiming to be itself the Backup Designated
+	//            Router.  Alternatively, an Hello Packet may be received from
+	//            a neighbor claiming to be itself the Designated Router, and
+	//            indicating that there is no Backup Designated Router.  In
+	//            either case there must be bidirectional communication with
+	//            the neighbor, i.e., the router must also appear in the
+	//            neighbor's Hello Packet.  This event signals an end to the
+	//            Waiting state.
+	IfEvBackupSeen
+	// IfEvNeighborChange There has been a change in the set of bidirectional
+	//            neighbors associated with the interface.  The (Backup)
+	//            Designated Router needs to be recalculated.  The following
+	//            neighbor changes lead to the NeighborChange event.  For an
+	//            explanation of neighbor states, see Section 10.1.
+	//
+	//            o   Bidirectional communication has been established to a
+	//                neighbor.  In other words, the state of the neighbor has
+	//                transitioned to 2-Way or higher.
+	//
+	//            o   There is no longer bidirectional communication with a
+	//                neighbor.  In other words, the state of the neighbor has
+	//                transitioned to Init or lower.
+	//
+	//            o   One of the bidirectional neighbors is newly declaring
+	//                itself as either Designated Router or Backup Designated
+	//                Router.  This is detected through examination of that
+	//                neighbor's Hello Packets.
+	//
+	//            o   One of the bidirectional neighbors is no longer
+	//                declaring itself as Designated Router, or is no longer
+	//                declaring itself as Backup Designated Router.  This is
+	//                again detected through examination of that neighbor's
+	//                Hello Packets.
+	//
+	//            o   The advertised Router Priority for a bidirectional
+	//                neighbor has changed.  This is again detected through
+	//                examination of that neighbor's Hello Packets.
+	IfEvNeighborChange
+	// IfEvLoopInd An indication has been received that the interface is now
+	//            looped back to itself.  This indication can be received
+	//            either from network management or from the lower level
+	//            protocols.
+	IfEvLoopInd
+	// IfEvUnLoopInd An indication has been received that the interface is no
+	//            longer looped back.  As with the LoopInd event, this
+	//            indication can be received either from network management or
+	//            from the lower level protocols.
+	IfEvUnLoopInd
+	// IfEvInterfaceDown Lower-level protocols indicate that this interface is no
+	//            longer functional.  No matter what the current interface
+	//            state is, the new interface state will be Down.
+	IfEvInterfaceDown
+)
+
+type InterfaceType uint8
+
+const (
+	_ InterfaceType = iota
+	IfTypePointToPoint
+	IfTypeBroadcast
+	IfTypeNBMA
+	IfTypePointToMultiPoint
+	IfTypeVirtualLink
+)
+
 type Interface struct {
 	// internal use
 
@@ -140,8 +226,9 @@ type Interface struct {
 
 	// The OSPF interface type is either point-to-point, broadcast,
 	//        NBMA, Point-to-MultiPoint or virtual link.
-	// Not used yet.
-	Type string
+	// Not actually used yet.
+	Type InterfaceType
+	MTU  uint16
 	// The functional level of an interface.  State determines whether
 	//        or not full adjacencies are allowed to form over the interface.
 	//        State is also reflected in the router's LSAs.
@@ -181,7 +268,7 @@ type Interface struct {
 	//        packet.  This timer fires every HelloInterval seconds.  Note
 	//        that on non-broadcast networks a separate Hello packet is sent
 	//        to each qualified neighbor.
-	HelloTicker *time.Ticker
+	HelloTicker *TickerFunc
 	// The number of seconds before the router's neighbors will declare
 	//        it down, when they stop hearing the router's Hello Packets.
 	//        Advertised in Hello packets sent out this interface.
@@ -248,11 +335,109 @@ type Interface struct {
 	Authentication string
 }
 
+func (i *Interface) shouldCheckNeighborNetworkMask() bool {
+	return i.Type != IfTypePointToPoint && i.Type != IfTypeVirtualLink
+}
+
+func (i *Interface) shouldHaveDR() bool {
+	return i.Type == IfTypeBroadcast || i.Type == IfTypeNBMA
+}
+
+func (i *Interface) currState() InterfaceState {
+	return i.State
+}
+
+func (i *Interface) transState(target InterfaceState) {
+	i.State = target
+}
+
+func (i *Interface) consumeEvent(e InterfaceStateChangingEvent) {
+	switch e {
+	case IfEvInterfaceUp:
+		if i.currState() == InterfaceDown {
+			// Start the interval Hello Timer, enabling the
+			// periodic sending of Hello packets out the interface.
+			i.runHelloTicker()
+			switch i.Type {
+			case IfTypePointToPoint, IfTypePointToMultiPoint, IfTypeVirtualLink:
+				// If the attached network is a physical point-to-point
+				// network, Point-to-MultiPoint network or virtual
+				// link, the interface state transitions to Point-to-Point.
+				i.transState(InterfacePointToPoint)
+			default:
+				if i.RouterPriority <= 0 {
+					// Else, if the router is not eligible to
+					// become Designated Router the interface state
+					// transitions to DR Other.
+					i.transState(InterfaceDROther)
+				} else {
+					// Otherwise, the attached network is a broadcast or
+					// NBMA network and the router is eligible to become
+					// Designated Router.  In this case, in an attempt to
+					// discover the attached network's Designated Router
+					// the interface state is set to Waiting and the single
+					// shot Wait Timer is started.  Additionally, if the
+					// network is an NBMA network examine the configured
+					// list of neighbors for this interface and generate
+					// the neighbor event Start for each neighbor that is
+					// also eligible to become Designated Router.
+				}
+			}
+		}
+	case IfEvBackupSeen:
+		if i.currState() == InterfaceWaiting {
+			// Calculate the attached network's Backup Designated
+			// Router and Designated Router, as shown in Section
+			// 9.4.  As a result of this calculation, the new state
+			// of the interface will be either DR Other, Backup or DR.
+		}
+	case IfEvWaitTimer:
+		if i.currState() == InterfaceWaiting {
+			// Calculate the attached network's Backup Designated
+			// Router and Designated Router, as shown in Section
+			// 9.4.  As a result of this calculation, the new state
+			// of the interface will be either DR Other, Backup or DR.
+		}
+	case IfEvNeighborChange:
+		switch i.currState() {
+		case InterfaceDROther, InterfaceBackup, InterfaceDR:
+			// Recalculate the attached network's Backup Designated
+			// Router and Designated Router, as shown in Section
+			// 9.4.  As a result of this calculation, the new state
+			// of the interface will be either DR Other, Backup or DR.
+		}
+	case IfEvInterfaceDown:
+		// All interface variables are reset, and interface
+		// timers disabled.  Also, all neighbor connections
+		// associated with the interface are destroyed.  This
+		// is done by generating the event KillNbr on all
+		// associated neighbors (see Section 10.2).
+		i.transState(InterfaceDown)
+		i.HelloTicker.Stop()
+		i.killAllNeighbor()
+	case IfEvLoopInd:
+		// Since this interface is no longer connected to the
+		// attached network the actions associated with the
+		// above InterfaceDown event are executed.
+		i.transState(InterfaceLoopBack)
+		i.HelloTicker.Stop()
+		i.killAllNeighbor()
+	case IfEvUnLoopInd:
+		if i.currState() == InterfaceLoopBack {
+			// No actions are necessary.  For example, the
+			// interface variables have already been reset upon
+			// entering the Loopback state.  Note that reception of
+			// an InterfaceUp event is necessary before the
+			// interface again becomes fully functional.
+			i.transState(InterfaceDown)
+		}
+	}
+}
+
 func (i *Interface) start() {
 	i.runReadLoop()
 	i.runSendLoop()
 	i.runReadDispatchLoop()
-	i.runHelloTicker()
 }
 
 func (i *Interface) close() error {
@@ -364,25 +549,14 @@ func (i *Interface) doSendPkt(pkt sendPkt) (err error) {
 }
 
 func (i *Interface) runHelloTicker() {
-	i.HelloTicker = time.NewTicker(time.Duration(i.HelloInterval) * time.Second)
-	i.wg.Add(1)
-	go func() {
-		var err error
-		for {
-			select {
-			case <-i.ctx.Done():
-				logDebug("Exiting runHelloTicker")
-				i.HelloTicker.Stop()
-				i.wg.Done()
-				return
-			case <-i.HelloTicker.C:
-				// directly writes the pkt and doNot enter queue.
-				if err = i.doHello(); err != nil {
-					// TODO: more aggressive retry ?
-				}
+	i.HelloTicker.Stop()
+	i.HelloTicker = TimeTickerFunc(i.ctx, time.Duration(i.HelloInterval)*time.Second,
+		func() {
+			// directly writes the pkt and doNot enter queue.
+			if err := i.doHello(); err != nil {
+				// TODO: more aggressive retry ?
 			}
-		}
-	}()
+		})
 }
 
 func (i *Interface) getNeighbor(rtId uint32) (nb *Neighbor, ok bool) {
@@ -398,16 +572,23 @@ func (i *Interface) removeNeighbor(nb *Neighbor) {
 	delete(i.Neighbors, nb.NeighborId)
 }
 
+func (i *Interface) killAllNeighbor() {
+	i.nbMu.Lock()
+	defer i.nbMu.Unlock()
+	for _, nb := range i.Neighbors {
+		nb.consumeEvent(NbEvKillNbr)
+	}
+	clear(i.Neighbors)
+}
+
 func (i *Interface) addNeighbor(h *ipv4.Header, hello *packet.OSPFv2Packet[packet.HelloPayloadV2]) *Neighbor {
 	nb := &Neighbor{
 		lastSeen:         time.Now(),
 		i:                i,
 		State:            NeighborDown,
-		IsMaster:         hello.RouterID > i.Area.ins.RouterId,
 		NeighborId:       hello.RouterID,
 		NeighborPriority: hello.Content.RtrPriority,
 		NeighborAddress:  h.Src,
-		NeighborOptions:  packet.BitOption(hello.Content.Options),
 		NeighborsDR:      hello.Content.DesignatedRouterID,
 		NeighborsBDR:     hello.Content.BackupDesignatedRouterID,
 	}

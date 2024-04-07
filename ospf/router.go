@@ -1,7 +1,6 @@
 package ospf
 
 import (
-	"encoding/binary"
 	"net"
 	"sync"
 
@@ -47,7 +46,7 @@ func NewRouter(ifName string, addr string, rtid string) (*Router, error) {
 		ctx:    ctx,
 		cancel: cancel,
 		ins: NewInstance(ctx, &InstanceConfig{
-			RouterId:           binary.BigEndian.Uint32(net.ParseIP(rtid).To4()[0:4]),
+			RouterId:           ipv4BytesToUint32(net.ParseIP(rtid).To4()[0:4]),
 			HelloInterval:      10,
 			RouterDeadInterval: 40,
 			Network: &net.IPNet{
