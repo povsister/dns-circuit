@@ -267,6 +267,7 @@ func (i *Interface) runReadDispatchLoop() {
 		for {
 			select {
 			case <-i.ctx.Done():
+				logDebug("Exiting runReadDispatchLoop")
 				i.wg.Done()
 				return
 			case pkt := <-i.pendingProcessPkt:
@@ -289,6 +290,7 @@ func (i *Interface) runReadLoop() {
 		for {
 			select {
 			case <-i.ctx.Done():
+				logDebug("Exiting runReadLoop")
 				i.wg.Done()
 				return
 			default:
@@ -328,6 +330,7 @@ func (i *Interface) runSendLoop() {
 		for {
 			select {
 			case <-i.ctx.Done():
+				logDebug("Exiting runSendLoop")
 				i.wg.Done()
 				return
 			case pkt := <-i.pendingSendPkt:
@@ -355,7 +358,7 @@ func (i *Interface) doSendPkt(pkt sendPkt) (err error) {
 	if err != nil {
 		logErr("Interface %s err send Packet: %v", i.c.ifi.Name, err)
 	} else {
-		logDebug("Interface %s sent Packets(%d): \n%+v", i.c.ifi.Name, n, pkt.p)
+		logDebug("Interface %s sent Packets(%d): \n%+v\n", i.c.ifi.Name, n, pkt.p)
 	}
 	return
 }
@@ -365,15 +368,18 @@ func (i *Interface) runHelloTicker() {
 	i.wg.Add(1)
 	go func() {
 		var err error
-		select {
-		case <-i.ctx.Done():
-			i.HelloTicker.Stop()
-			i.wg.Done()
-			return
-		case <-i.HelloTicker.C:
-			// directly writes the pkt and doNot enter queue.
-			if err = i.doHello(); err != nil {
-				// TODO: more aggressive retry ?
+		for {
+			select {
+			case <-i.ctx.Done():
+				logDebug("Exiting runHelloTicker")
+				i.HelloTicker.Stop()
+				i.wg.Done()
+				return
+			case <-i.HelloTicker.C:
+				// directly writes the pkt and doNot enter queue.
+				if err = i.doHello(); err != nil {
+					// TODO: more aggressive retry ?
+				}
 			}
 		}
 	}()

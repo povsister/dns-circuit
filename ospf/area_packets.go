@@ -87,7 +87,7 @@ func (i *Interface) doHello() (err error) {
 	if err != nil {
 		logErr("Interface %s err send HelloPacket: %v", i.c.ifi.Name, err)
 	} else {
-		logDebug("Interface %s sent HelloPackets(%d): \n%+v", i.c.ifi.Name, n, hello)
+		logDebug("Interface %s sent HelloPackets(%d): \n%+v\n", i.c.ifi.Name, n, hello)
 	}
 	return err
 }

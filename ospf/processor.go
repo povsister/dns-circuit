@@ -71,7 +71,9 @@ func (a *Area) procHello(i *Interface, h *ipv4.Header, hello *packet.OSPFv2Packe
 	}
 }
 
-func (a *Area) procDatabaseDesc(i *Interface, h *ipv4.Header, dbd *packet.OSPFv2Packet[packet.DbDescPayload]) {
+func (a *Area) procDatabaseDesc(i *Interface, h *ipv4.Header, dd *packet.OSPFv2Packet[packet.DbDescPayload]) {
+	logDebug("Got OSPFv%d %s\nRouterId: %v AreaId: %v\n%+v\n", dd.Version, dd.Type, dd.RouterID, dd.AreaID,
+		dd.Content)
 
 }
 

@@ -271,7 +271,7 @@ func (n *Neighbor) consumeEvent(e NeighborStateChangingEvent) {
 			// Otherwise (an adjacency should be established) the neighbor state transitions to ExStart.
 			if n.shouldFormAdjacency() {
 				n.transState(NeighborExStart)
-				n.startMasterNegotiation()
+				//n.startMasterNegotiation()
 			} else {
 				n.transState(Neighbor2Way)
 			}

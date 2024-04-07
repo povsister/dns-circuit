@@ -12,7 +12,7 @@ type Router struct {
 	startOnce sync.Once
 	ctx       context.Context
 	cancel    context.CancelFunc
-	
+
 	closeErr  error
 	closeOnce sync.Once
 
@@ -67,15 +67,11 @@ func (r *Router) Start() {
 	})
 }
 
-func (r *Router) cleanup() {
-}
-
 func (r *Router) Close() (err error) {
 	r.closeOnce.Do(func() {
 		if r.cancel != nil {
 			r.cancel()
 		}
-		r.cleanup()
 		r.ins.shutdown()
 	})
 	return r.closeErr
