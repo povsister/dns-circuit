@@ -1,4 +1,4 @@
-package ospf
+package packet
 
 import (
 	"math/rand/v2"
@@ -66,6 +66,31 @@ const (
 	//        0.0.0.0.
 	DefaultDestination = 0
 
+	// The sequence number field is a signed 32-bit integer.  It is
+	//            used to detect old and duplicate LSAs.  The space of
+	//            sequence numbers is linearly ordered.  The larger the
+	//            sequence number (when compared as signed 32-bit integers)
+	//            the more recent the LSA.  To describe to sequence number
+	//            space more precisely, let N refer in the discussion below to
+	//            the constant 2**31.
+	//
+	//            The sequence number -N (0x80000000) is reserved (and
+	//            unused).  This leaves -N + 1 (0x80000001) as the smallest
+	//            (and therefore oldest) sequence number; this sequence number
+	//            is referred to as the constant InitialSequenceNumber. A
+	//            router uses InitialSequenceNumber the first time it
+	//            originates any LSA.  Afterwards, the LSA's sequence number
+	//            is incremented each time the router originates a new
+	//            instance of the LSA.  When an attempt is made to increment
+	//            the sequence number past the maximum value of N - 1
+	//            (0x7fffffff; also referred to as MaxSequenceNumber), the
+	//            current instance of the LSA must first be flushed from the
+	//            routing domain.  This is done by prematurely aging the LSA
+	//            (see Section 14.1) and reflooding it.  As soon as this flood
+	//            has been acknowledged by all adjacent neighbors, a new
+	//            instance can be originated with sequence number of
+	//            InitialSequenceNumber.
+
 	// InitialSequenceNumber The value used for LS Sequence Number when originating the first
 	//        instance of any LSA. Its value is the signed 32-bit integer
 	//        0x80000001.
@@ -77,5 +102,5 @@ const (
 )
 
 var (
-	randSource = rand.New(rand.NewPCG(uint64(time.Now().Unix()), uint64(time.Now().Unix()/2)))
+	RandSource = rand.New(rand.NewPCG(uint64(time.Now().Unix()), uint64(time.Now().Unix()/2)))
 )

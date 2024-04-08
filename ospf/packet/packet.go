@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"math"
 
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
@@ -111,6 +112,14 @@ func (p LSRequestPayload) SerializeToSizedBuffer(b []byte) (err error) {
 
 // LSReq stands for a single link state request entry.
 type LSReq layers.LSReq
+
+func (p LSReq) GetLSAIdentity() LSAIdentity {
+	return LSAIdentity{
+		LSType:      p.LSType,
+		LinkStateId: p.LSID,
+		AdvRouter:   p.AdvRouter,
+	}
+}
 
 func (p LSReq) Size() int {
 	return 12
@@ -279,15 +288,50 @@ func lsaChecksum(b []byte) uint16 {
 	return (sum2 << 8) | sum1
 }
 
-// LSAheader
-// LS Type   Link State ID
-// _______________________________________________
-// 1         The originating router's Router ID.
-// 2         The IP interface address of the network's Designated Router.
-// 3         The destination network's IP address.
-// 4         The Router ID of the described AS boundary router.
-// 5         The destination network's IP address.
 type LSAheader layers.LSAheader
+
+func (p LSAheader) GetLSAIdentity() LSAIdentity {
+	return LSAIdentity{
+		LSType:      p.LSType,
+		LinkStateId: p.LinkStateID,
+		AdvRouter:   p.AdvRouter,
+	}
+}
+
+func (p LSAheader) IsMoreRecentThan(toCompare LSAheader) bool {
+	// The LSA having the newer LS sequence number is more recent.
+	if int32(p.LSSeqNumber) > int32(toCompare.LSSeqNumber) {
+		return true
+	}
+	// If the two instances have different LS checksums, then the
+	// instance having the larger LS checksum (when considered as a
+	// 16-bit unsigned integer) is considered more recent.
+	if p.LSChecksum > toCompare.LSChecksum {
+		return true
+	}
+	// if only one of the instances has its LS age field set
+	// to MaxAge, the instance of age MaxAge is considered to be more recent.
+	if p.LSAge == MaxAge && toCompare.LSAge != MaxAge {
+		return true
+	}
+	// if the LS age fields of the two instances differ by
+	// more than MaxAgeDiff, the instance having the smaller (younger)
+	// LS age is considered to be more recent.
+	if (int32(p.LSAge)-int32(toCompare.LSAge))&math.MaxInt32 > MaxAgeDiff &&
+		p.LSAge < toCompare.LSAge {
+		return true
+	}
+	// Else, the two instances are considered to be identical.
+	return false
+}
+
+func (p LSAheader) GetLSReq() LSReq {
+	return LSReq{
+		LSType:    p.LSType,
+		LSID:      p.LinkStateID,
+		AdvRouter: p.AdvRouter,
+	}
+}
 
 func (p LSAheader) Size() int {
 	return 20

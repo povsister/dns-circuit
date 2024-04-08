@@ -16,6 +16,8 @@ type LSAIdentity struct {
 	AdvRouter   uint32
 }
 
+var InvalidLSAIdentity = LSAIdentity{}
+
 type LSAdvPayload interface {
 	V2RouterLSA | V2NetworkLSA |
 		V2SummaryLSAType3 | V2SummaryLSAType4 |

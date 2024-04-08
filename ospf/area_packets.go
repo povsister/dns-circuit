@@ -48,14 +48,9 @@ func (i *Interface) queuePktForSend(pkt sendPkt) {
 
 func (i *Interface) doHello() (err error) {
 	hello := &packet.OSPFv2Packet[packet.HelloPayloadV2]{
-		OSPFv2: layers.OSPFv2{
-			OSPF: layers.OSPF{
-				Version:  2,
-				Type:     layers.OSPFHello,
-				RouterID: i.Area.ins.RouterId,
-				AreaID:   i.Area.AreaId,
-			},
-		},
+		OSPFv2: i.Area.ospfPktHeader(func(p *packet.LayerOSPFv2) {
+			p.Type = layers.OSPFHello
+		}),
 		Content: packet.HelloPayloadV2{
 			HelloPkg: layers.HelloPkg{
 				RtrPriority:              i.RouterPriority,
@@ -96,4 +91,19 @@ func (i *Interface) doHello() (err error) {
 			hello)
 	}
 	return err
+}
+
+func (a *Area) ospfPktHeader(fn func(p *packet.LayerOSPFv2)) layers.OSPFv2 {
+	ret := layers.OSPFv2{
+		OSPF: layers.OSPF{
+			Version:  2,
+			Type:     0,
+			RouterID: a.ins.RouterId,
+			AreaID:   a.AreaId,
+		},
+		AuType:         0,
+		Authentication: 0,
+	}
+	fn((*packet.LayerOSPFv2)(&ret))
+	return ret
 }

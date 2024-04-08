@@ -37,6 +37,11 @@ func TestTCS(t *testing.T) {
 
 func TestRandSource(t *testing.T) {
 	for i := 0; i < 100; i++ {
-		t.Log(randSource.Uint32N(math.MaxUint32 / 4))
+		t.Log(packet.RandSource.Uint32N(math.MaxUint32 / 4))
 	}
+}
+
+func TestBB(t *testing.T) {
+	t.Logf("%b", packet.InitialSequenceNumber)
+	t.Logf("%b", packet.MaxSequenceNumber)
 }

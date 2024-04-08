@@ -171,8 +171,8 @@ func (a *Area) procDatabaseDesc(i *Interface, h *ipv4.Header, dd *packet.OSPFv2P
 		// event NegotiationDone (causing the state to transition to
 		// Exchange)
 		flags := packet.BitOption(dd.Content.Flags)
-		if flags.IsBitSet(packet.DDOptionIbit) && flags.IsBitSet(packet.DDOptionMbit) &&
-			flags.IsBitSet(packet.DDOptionMSbit) && len(dd.Content.LSAinfo) <= 0 &&
+		if flags.IsBitSet(packet.DDFlagIbit) && flags.IsBitSet(packet.DDFlagMbit) &&
+			flags.IsBitSet(packet.DDFlagMSbit) && len(dd.Content.LSAinfo) <= 0 &&
 			neighbor.NeighborId > i.Area.ins.RouterId {
 			// The initialize(I), more (M) and master(MS) bits are set,
 			// the contents of the packet are empty, and the neighbor's
@@ -183,7 +183,7 @@ func (a *Area) procDatabaseDesc(i *Interface, h *ipv4.Header, dd *packet.OSPFv2P
 			logDebug("ExStart negotiation result: I am slave")
 			neighbor.IsMaster = true
 			neighbor.DDSeqNumber.Store(dd.Content.DDSeqNumber)
-		} else if !flags.IsBitSet(packet.DDOptionIbit) && !flags.IsBitSet(packet.DDOptionMSbit) &&
+		} else if !flags.IsBitSet(packet.DDFlagIbit) && !flags.IsBitSet(packet.DDFlagMSbit) &&
 			dd.Content.DDSeqNumber == neighbor.DDSeqNumber.Load() && neighbor.NeighborId < i.Area.ins.RouterId {
 			// The initialize(I) and master(MS) bits are off, the
 			// packet's DD sequence number equals the neighbor data
@@ -231,8 +231,8 @@ func (a *Area) procDatabaseDesc(i *Interface, h *ipv4.Header, dd *packet.OSPFv2P
 			return
 		}
 		flags := packet.BitOption(dd.Content.Flags)
-		if flags.IsBitSet(packet.DDOptionMSbit) != neighbor.IsMaster ||
-			flags.IsBitSet(packet.DDOptionIbit) ||
+		if flags.IsBitSet(packet.DDFlagMSbit) != neighbor.IsMaster ||
+			flags.IsBitSet(packet.DDFlagIbit) ||
 			packet.BitOption(dd.Content.Options) != neighbor.NeighborOptions {
 			// If the state of the MS-bit is inconsistent with the
 			// master/slave state of the connection, generate the
@@ -278,7 +278,7 @@ func (a *Area) procDatabaseDesc(i *Interface, h *ipv4.Header, dd *packet.OSPFv2P
 			// then process the dd from master
 			allDDSent := neighbor.slaveDDEchoAndExchange(dd)
 			neighbor.parseDD(dd)
-			if !packet.BitOption(dd.Content.Flags).IsBitSet(packet.DDOptionMbit) && allDDSent {
+			if !packet.BitOption(dd.Content.Flags).IsBitSet(packet.DDFlagMbit) && allDDSent {
 				// no more DD packets from master.
 				// and all local dd has been sent.
 				// This marks dd exchange done.
@@ -289,7 +289,7 @@ func (a *Area) procDatabaseDesc(i *Interface, h *ipv4.Header, dd *packet.OSPFv2P
 			// parse it and try continue sending next dd
 			neighbor.parseDD(dd)
 			if needWaitForAck := neighbor.masterContinueDDExchange(packet.BitOption(dd.Content.Flags).
-				IsBitSet(packet.DDOptionMbit)); !needWaitForAck {
+				IsBitSet(packet.DDFlagMbit)); !needWaitForAck {
 				// no dd echo need(no dd packet has been sent or slave has finished DD, too).
 				// indicating it is the last dd packet echo.
 				// This marks the end of dd packet send process.
@@ -321,7 +321,7 @@ func (a *Area) procDatabaseDesc(i *Interface, h *ipv4.Header, dd *packet.OSPFv2P
 			neighbor.consumeEvent(NbEvSeqNumberMismatch)
 		}
 	default:
-		logDebug("Ignored DatabaseDesc from RouterId: %v AreId: %v: neighbor state mismatch",
+		logDebug("Ignored DatabaseDesc from RouterId: %v AreaId: %v: neighbor state mismatch",
 			dd.RouterID, dd.AreaID)
 	}
 }
@@ -329,16 +329,82 @@ func (a *Area) procDatabaseDesc(i *Interface, h *ipv4.Header, dd *packet.OSPFv2P
 func (a *Area) procLSR(i *Interface, h *ipv4.Header, lsr *packet.OSPFv2Packet[packet.LSRequestPayload]) {
 	logDebug("Got OSPFv%d %s(%d)\nRouterId: %v AreaId: %v\n%+v", lsr.Version, lsr.Type, lsr.PacketLength,
 		lsr.RouterID, lsr.AreaID, lsr.Content)
+
+	neighbor, ok := i.getNeighbor(lsr.RouterID)
+	if !ok {
+		return
+	}
+	// Received Link State Request Packets
+	// specify a list of LSAs that the neighbor wishes to receive.
+	switch neighbor.currState() {
+	// Link State Request Packets should be accepted when the neighbor
+	// is in states Exchange, Loading, or Full.
+	case NeighborExchange, NeighborLoading, NeighborFull:
+		// If an LSA cannot be found in the database,
+		// something has gone wrong with the Database Exchange process, and
+		// neighbor event BadLSReq should be generated.
+		if err := a.respondLSR(neighbor, lsr.Content); err != nil {
+			logErr("Wrong LSRequest from RouterId: %v AreaId: %v: %v", neighbor.NeighborId, a.AreaId, err)
+			neighbor.consumeEvent(NbEvBadLSReq)
+		}
+	default:
+		// In all other states Link State Request Packets should be ignored.
+		return
+	}
 }
 
 func (a *Area) procLSU(i *Interface, h *ipv4.Header, lsu *packet.OSPFv2Packet[packet.LSUpdatePayload]) {
 	logDebug("Got OSPFv%d %s(%d)\nRouterId: %v AreaId: %v\n%+v", lsu.Version, lsu.Type, lsu.PacketLength,
 		lsu.RouterID, lsu.AreaID, lsu.Content)
 
+	neighbor, ok := i.getNeighbor(lsu.RouterID)
+	if !ok {
+		return
+	}
+	// If the neighbor is in a lesser state than Exchange, the packet should
+	// be dropped without further processing.
+	if neighbor.currState() < NeighborExchange {
+		return
+	}
+
+	// All types of LSAs, other than AS-external-LSAs, are associated with
+	// a specific area.  However, LSAs do not contain an area field.  An
+	// LSA's area must be deduced from the Link State Update packet header.
+
+	acks := make([]packet.LSAheader, 0, lsu.Content.NumOfLSAs)
+	for _, l := range lsu.Content.LSAs {
+		ack, err := a.tryLSDbUpdateByLSA(l)
+		if err != nil {
+			logErr("Area %v err parse LSUpdate from neighbor %v: %v\n%+v", a.AreaId, neighbor.NeighborId,
+				err, l)
+			continue
+		}
+		if ack.GetLSAIdentity() != packet.InvalidLSAIdentity {
+			acks = append(acks, ack)
+		}
+	}
+	if len(acks) > 0 {
+		neighbor.ackLSAdvertisements(acks)
+	}
 }
 
 func (a *Area) procLSAck(i *Interface, h *ipv4.Header, lsack *packet.OSPFv2Packet[packet.LSAcknowledgementPayload]) {
 	logDebug("Got OSPFv%d %s(%d)\nRouterId: %v AreaId: %v\n%+v", lsack.Version, lsack.Type, lsack.PacketLength,
 		lsack.RouterID, lsack.AreaID, lsack.Content)
 
+	neighbor, ok := i.getNeighbor(lsack.RouterID)
+	if !ok {
+		return
+	}
+	// If this neighbor is in a lesser state than
+	// Exchange, the Link State Acknowledgment packet is discarded.
+	if neighbor.currState() < NeighborExchange {
+		return
+	}
+
+	invalidAcks := neighbor.tryEmptyLSRetransmissionListByAck(lsack)
+	if len(invalidAcks) > 0 {
+		logWarn("Wrong LSAck from RouterId: %v AreaId: %v: \n%+v", neighbor.NeighborId, a.AreaId,
+			invalidAcks)
+	}
 }

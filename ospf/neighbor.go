@@ -4,6 +4,7 @@ import (
 	"math"
 	"net"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -167,19 +168,23 @@ type Neighbor struct {
 	// The list of LSAs that have been flooded but not acknowledged on
 	//        this adjacency.  These will be retransmitted at intervals until
 	//        they are acknowledged, or until the adjacency is destroyed.
-	LSRetransmission []*packet.LSAdvertisement
+	LSRetransmission map[packet.LSAIdentity]struct{}
+	lsRetransRw      sync.RWMutex
+
 	// The complete list of LSAs that make up the area link-state
 	//        database, at the moment the neighbor goes into Database Exchange
 	//        state.  This list is sent to the neighbor in Database
 	//        Description packets.
-	DatabaseSummary []packet.LSAheader
+	DatabaseSummary []packet.LSAIdentity
 	// The list of LSAs that need to be received from this neighbor in
 	//        order to synchronize the two neighbors' link-state databases.
 	//        This list is created as Database Description packets are
 	//        received, and is then sent to the neighbor in Link State Request
 	//        packets.  The list is depleted as appropriate Link State Update
 	//        packets are received.
-	LSRequest []packet.LSReq
+	LSRequest                 []packet.LSReq
+	lsReqRw                   sync.RWMutex
+	lsReqRetransmissionTicker *TickerFunc
 }
 
 func (n *Neighbor) currState() NeighborState {
@@ -200,6 +205,10 @@ func (n *Neighbor) transState(target NeighborState) {
 	case NeighborExchange:
 		if stateChanged {
 			n.ddRetransmissionTicker.Stop()
+		}
+	case NeighborLoading:
+		if stateChanged {
+			n.lsReqRetransmissionTicker.Stop()
 		}
 	}
 	// check dst state
@@ -343,10 +352,11 @@ func (n *Neighbor) consumeEvent(e NeighborStateChangingEvent) {
 			//                    discovered but not yet received in the Exchange
 			//                    state).  These LSAs are listed in the Link state
 			//                    request list associated with the neighbor.
-			if len(n.LSRequest) <= 0 {
+			if n.isLSReqListEmpty() {
 				n.transState(NeighborFull)
 			} else {
 				n.transState(NeighborLoading)
+				n.startLSR()
 			}
 		}
 	case NbEvLoadingDone:
@@ -388,8 +398,8 @@ func (n *Neighbor) consumeEvent(e NeighborStateChangingEvent) {
 			//                    initialize (I), more (M) and master (MS) bits set.
 			//                    This Database Description Packet should be otherwise
 			//                    empty (see Section 10.8).
-			clear(n.LSRetransmission)
-			clear(n.LSRequest)
+			n.clearLSRetransmissionList()
+			n.clearLSReqList()
 			clear(n.DatabaseSummary)
 			n.startMasterNegotiation()
 		}
@@ -446,27 +456,22 @@ func (n *Neighbor) startMasterNegotiation() {
 		maxInitialDDSeqNum = 1 << 16
 	)
 	if ddSeqNum <= 0 {
-		ddSeqNum = randSource.Uint32N(math.MaxUint32) % maxInitialDDSeqNum
+		ddSeqNum = packet.RandSource.Uint32N(math.MaxUint32) % maxInitialDDSeqNum
 		n.DDSeqNumber.Store(ddSeqNum)
 	} else {
 		ddSeqNum += 1
 		n.DDSeqNumber.Store(ddSeqNum)
 	}
 	dd := &packet.OSPFv2Packet[packet.DbDescPayload]{
-		OSPFv2: layers.OSPFv2{
-			OSPF: layers.OSPF{
-				Version:  2,
-				Type:     layers.OSPFDatabaseDescription,
-				RouterID: n.i.Area.ins.RouterId,
-				AreaID:   n.i.Area.AreaId,
-			},
-		},
+		OSPFv2: n.i.Area.ospfPktHeader(func(p *packet.LayerOSPFv2) {
+			p.Type = layers.OSPFDatabaseDescription
+		}),
 		Content: packet.DbDescPayload{
 			DbDescPkg: layers.DbDescPkg{
 				Options:      uint32(n.i.Area.Options),
 				InterfaceMTU: n.i.MTU,
-				Flags: uint16(packet.BitOption(0).SetBit(packet.DDOptionMSbit,
-					packet.DDOptionIbit, packet.DDOptionMbit)),
+				Flags: uint16(packet.BitOption(0).SetBit(packet.DDFlagMSbit,
+					packet.DDFlagIbit, packet.DDFlagMbit)),
 				DDSeqNumber: ddSeqNum,
 			},
 		},
@@ -511,20 +516,15 @@ func (n *Neighbor) parseDD(dd *packet.OSPFv2Packet[packet.DbDescPayload]) {
 	if len(dd.Content.LSAinfo) <= 0 {
 		return
 	}
-	lsReq := n.i.Area.unknownLS(dd)
-	n.LSRequest = append(n.LSRequest, lsReq...)
+	lsReq := n.i.Area.getLSReqListFromDD(dd)
+	n.appendLSReqList(lsReq...)
 }
 
 func (n *Neighbor) echoDDWithPossibleRetransmission(dd *packet.OSPFv2Packet[packet.DbDescPayload]) {
 	echoDD := &packet.OSPFv2Packet[packet.DbDescPayload]{
-		OSPFv2: layers.OSPFv2{
-			OSPF: layers.OSPF{
-				Version:  2,
-				Type:     layers.OSPFDatabaseDescription,
-				RouterID: n.i.Area.ins.RouterId,
-				AreaID:   n.i.Area.AreaId,
-			},
-		},
+		OSPFv2: n.i.Area.ospfPktHeader(func(p *packet.LayerOSPFv2) {
+			p.Type = layers.OSPFDatabaseDescription
+		}),
 	}
 	if lastDDEcho := n.lastSlaveDDSent.Get(); lastDDEcho != nil {
 		echoDD.Content = *lastDDEcho
@@ -536,7 +536,7 @@ func (n *Neighbor) echoDDWithPossibleRetransmission(dd *packet.OSPFv2Packet[pack
 				Flags: func() uint16 {
 					retFlag := packet.BitOption(0)
 					if len(n.DatabaseSummary) > 0 {
-						retFlag = retFlag.SetBit(packet.DDOptionMbit)
+						retFlag = retFlag.SetBit(packet.DDFlagMbit)
 					}
 					return uint16(retFlag)
 				}(),
@@ -568,29 +568,24 @@ func (n *Neighbor) sendDDExchange() {
 	)
 	// simply one LSA per DD to avoid potential MTU issue.
 	if len(n.DatabaseSummary) >= 1 {
-		toSendLSAs = append(toSendLSAs, n.DatabaseSummary[0])
+		toSendLSAs = append(toSendLSAs, n.i.Area.lsDbGetLSAheaderByIdentity(n.DatabaseSummary[0])...)
 		n.DatabaseSummary = n.DatabaseSummary[1:]
 		if len(n.DatabaseSummary) > 0 {
 			moreBit = true
 		}
 	}
 	dd := &packet.OSPFv2Packet[packet.DbDescPayload]{
-		OSPFv2: layers.OSPFv2{
-			OSPF: layers.OSPF{
-				Version:  2,
-				Type:     layers.OSPFDatabaseDescription,
-				RouterID: n.i.Area.ins.RouterId,
-				AreaID:   n.i.Area.AreaId,
-			},
-		},
+		OSPFv2: n.i.Area.ospfPktHeader(func(p *packet.LayerOSPFv2) {
+			p.Type = layers.OSPFDatabaseDescription
+		}),
 		Content: packet.DbDescPayload{
 			DbDescPkg: layers.DbDescPkg{
 				Options:      uint32(n.i.Area.Options),
 				InterfaceMTU: n.i.MTU,
 				Flags: func() uint16 {
-					ret := packet.BitOption(0).SetBit(packet.DDOptionMSbit)
+					ret := packet.BitOption(0).SetBit(packet.DDFlagMSbit)
 					if moreBit {
-						ret = ret.SetBit(packet.DDOptionMbit)
+						ret = ret.SetBit(packet.DDFlagMbit)
 					}
 					return uint16(ret)
 				}(),
@@ -614,16 +609,7 @@ func (n *Neighbor) sendDDExchange() {
 }
 
 func (n *Neighbor) fillDatabaseSummary() {
-	n.DatabaseSummary = []packet.LSAheader{
-		{
-			LSAge:       10,
-			LSType:      513,
-			LinkStateID: ipv4BytesToUint32(n.i.Address.IP.To4()),
-			AdvRouter:   n.i.Area.ins.RouterId,
-			LSSeqNumber: InitialSequenceNumber,
-			LSOptions:   0,
-		},
-	}
+	n.DatabaseSummary = n.i.Area.lsDbGetDatabaseSummary()
 }
 
 func (n *Neighbor) masterStartDDExchange(dd *packet.OSPFv2Packet[packet.DbDescPayload]) {
@@ -654,7 +640,7 @@ func (n *Neighbor) slavePrepareDDExchange() {
 func (n *Neighbor) slaveDDEchoAndExchange(dd *packet.OSPFv2Packet[packet.DbDescPayload]) (allDDSent bool) {
 	if len(n.DatabaseSummary) >= 1 {
 		// simply one LSA per DD to avoid potential MTU issue.
-		toSendLSA := []packet.LSAheader{n.DatabaseSummary[0]}
+		toSendLSA := n.i.Area.lsDbGetLSAheaderByIdentity(n.DatabaseSummary[0])
 		n.DatabaseSummary = n.DatabaseSummary[1:]
 		allDDSent = len(n.DatabaseSummary) <= 0
 		n.lastSlaveDDSent.Set(&packet.DbDescPayload{
@@ -664,7 +650,7 @@ func (n *Neighbor) slaveDDEchoAndExchange(dd *packet.OSPFv2Packet[packet.DbDescP
 				Flags: func() uint16 {
 					retFlag := packet.BitOption(0)
 					if !allDDSent {
-						retFlag = retFlag.SetBit(packet.DDOptionMbit)
+						retFlag = retFlag.SetBit(packet.DDFlagMbit)
 					}
 					return uint16(retFlag)
 				}(),
@@ -677,4 +663,81 @@ func (n *Neighbor) slaveDDEchoAndExchange(dd *packet.OSPFv2Packet[packet.DbDescP
 	}
 	n.echoDDWithPossibleRetransmission(dd)
 	return
+}
+
+func (n *Neighbor) isLSReqListEmpty() bool {
+	n.lsReqRw.RLock()
+	defer n.lsReqRw.RUnlock()
+	return len(n.LSRequest) <= 0
+}
+
+func (n *Neighbor) appendLSReqList(lsrs ...packet.LSReq) {
+	n.lsReqRw.Lock()
+	defer n.lsReqRw.Unlock()
+	n.LSRequest = append(n.LSRequest, lsrs...)
+}
+
+func (n *Neighbor) clearLSReqList() {
+	n.lsReqRw.Lock()
+	defer n.lsReqRw.Unlock()
+	clear(n.LSRequest)
+}
+
+func (n *Neighbor) startLSR() {
+	n.lsReqRetransmissionTicker.Stop()
+	n.lsReqRetransmissionTicker = TimeTickerFunc(n.i.ctx, time.Duration(n.i.RxmtInterval)*time.Second, func() {
+		if n.sendOutTopLSR() <= 0 {
+			// no LSR has been sent. means that the list is empty.
+			n.lsReqRetransmissionTicker.Stop()
+		}
+	})
+}
+
+func (n *Neighbor) sendOutTopLSR() int {
+	n.lsReqRw.RLock()
+	defer n.lsReqRw.RUnlock()
+	if len(n.LSRequest) <= 0 {
+		return 0
+	}
+	firstReq := n.LSRequest[0]
+	lsr := &packet.OSPFv2Packet[packet.LSRequestPayload]{
+		OSPFv2: n.i.Area.ospfPktHeader(func(p *packet.LayerOSPFv2) {
+			p.Type = layers.OSPFLinkStateRequest
+		}),
+		Content: packet.LSRequestPayload{firstReq},
+	}
+	n.i.queuePktForSend(sendPkt{
+		dst: ipv4BytesToUint32(n.NeighborAddress.To4()),
+		p:   lsr,
+	})
+	return 1
+}
+
+func (n *Neighbor) clearLSRetransmissionList() {
+	n.lsRetransRw.Lock()
+	defer n.lsRetransRw.Unlock()
+	clear(n.LSRetransmission)
+}
+
+func (n *Neighbor) tryEmptyLSRetransmissionListByAck(lsAcks *packet.OSPFv2Packet[packet.LSAcknowledgementPayload]) (
+	invalidAcks []packet.LSAheader) {
+	n.lsRetransRw.Lock()
+	defer n.lsRetransRw.Unlock()
+	validAcks := make([]packet.LSAIdentity, 0, len(lsAcks.Content))
+	for _, ack := range lsAcks.Content {
+		id := ack.GetLSAIdentity()
+		if _, exist := n.LSRetransmission[id]; exist {
+			validAcks = append(validAcks, id)
+		} else {
+			invalidAcks = append(invalidAcks, ack)
+		}
+	}
+	for _, vack := range validAcks {
+		delete(n.LSRetransmission, vack)
+	}
+	return
+}
+
+func (n *Neighbor) ackLSAdvertisements(acks []packet.LSAheader) {
+
 }

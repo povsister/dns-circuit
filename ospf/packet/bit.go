@@ -76,14 +76,29 @@ const (
 	//       |         Interface MTU         |    Options    |0|0|0|0|0|I|M|MS
 	//       +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 
-	// DDOptionMSbit The Master/Slave bit.  When set to 1, it indicates that the
+	// DDFlagMSbit The Master/Slave bit.  When set to 1, it indicates that the
 	//        router is the master during the Database Exchange process.
 	//        Otherwise, the router is the slave.
-	DDOptionMSbit = 0
-	// DDOptionMbit The More bit.  When set to 1, it indicates that more Database
+	DDFlagMSbit = 0
+	// DDFlagMbit The More bit.  When set to 1, it indicates that more Database
 	//        Description Packets are to follow.
-	DDOptionMbit = 1
-	// DDOptionIbit The Init bit.  When set to 1, this packet is the first in the
+	DDFlagMbit = 1
+	// DDFlagIbit The Init bit.  When set to 1, this packet is the first in the
 	//        sequence of Database Description Packets.
-	DDOptionIbit = 2
+	DDFlagIbit = 2
+)
+
+const (
+	//       +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+	//       |    0    |V|E|B|        0      |            # links            |
+	//       +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+	// RouterLSAFlagBbit When set, the router is an area border router (B is for border).
+	RouterLSAFlagBbit = 0
+	// RouterLSAFlagEbit When set, the router is an AS boundary router (E is for external).
+	RouterLSAFlagEbit = 1
+	// RouterLSAFlagVbit When set, the router is an endpoint of one or more fully
+	//        adjacent virtual links having the described area as Transit area
+	//        (V is for virtual link endpoint).
+	RouterLSAFlagVbit = 2
 )
