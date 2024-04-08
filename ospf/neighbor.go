@@ -208,6 +208,9 @@ func (n *Neighbor) transState(target NeighborState) {
 		if n.InactivityTimer != nil {
 			n.InactivityTimer.Stop()
 		}
+		if n.lastReceivedDDInvalidTimer != nil {
+			n.lastReceivedDDInvalidTimer.Stop()
+		}
 	}
 	logDebug("Neighbor %v state change: %v -> %v", n.NeighborId, currState, target)
 	n.State = target
@@ -439,8 +442,11 @@ func (n *Neighbor) startInactivityTimer() {
 
 func (n *Neighbor) startMasterNegotiation() {
 	ddSeqNum := n.DDSeqNumber.Load()
+	const (
+		maxInitialDDSeqNum = 1 << 16
+	)
 	if ddSeqNum <= 0 {
-		ddSeqNum = randSource.Uint32N(math.MaxUint32 / 4)
+		ddSeqNum = randSource.Uint32N(math.MaxUint32) % maxInitialDDSeqNum
 		n.DDSeqNumber.Store(ddSeqNum)
 	} else {
 		ddSeqNum += 1
@@ -622,7 +628,8 @@ func (n *Neighbor) fillDatabaseSummary() {
 
 func (n *Neighbor) masterStartDDExchange(dd *packet.OSPFv2Packet[packet.DbDescPayload]) {
 	n.fillDatabaseSummary()
-	// for some reason, ROS will send LSA in the first DD echo packet.
+	// for some reason, ROS will send LSA in the slave negotiation result ack packet.
+	// so we must parse those DD payload here
 	n.parseDD(dd)
 	n.sendDDExchange()
 }

@@ -168,24 +168,7 @@ func (a *Area) procDatabaseDesc(i *Interface, h *ipv4.Header, dd *packet.OSPFv2P
 		// If the received packet matches one of the following cases,
 		// then the neighbor state machine should be executed with the
 		// event NegotiationDone (causing the state to transition to
-		// Exchange), the packet's Options field should be recorded in
-		// the neighbor structure's Neighbor Options field.
-		negotiationDone := func() {
-			neighbor.NeighborOptions = packet.BitOption(dd.Content.Options)
-			neighbor.saveLastReceivedDD(dd)
-			if neighbor.IsMaster {
-				// im slave. prepare for dd exchange
-				neighbor.consumeEvent(NbEvNegotiationDone)
-				logDebug("Wait for first master sync")
-				// note that the dd echo is sent by fallthrough statement
-				neighbor.slavePrepareDDExchange()
-			} else {
-				// im master. starting dd exchange.
-				neighbor.consumeEvent(NbEvNegotiationDone)
-				logDebug("Sending out first DD exchange")
-				neighbor.masterStartDDExchange(dd)
-			}
-		}
+		// Exchange)
 		flags := packet.BitOption(dd.Content.Flags)
 		if flags.IsBitSet(packet.DDOptionIbit) && flags.IsBitSet(packet.DDOptionMbit) &&
 			flags.IsBitSet(packet.DDOptionMSbit) && len(dd.Content.LSAinfo) <= 0 &&
@@ -199,7 +182,6 @@ func (a *Area) procDatabaseDesc(i *Interface, h *ipv4.Header, dd *packet.OSPFv2P
 			logDebug("ExStart negotiation result: I am slave")
 			neighbor.IsMaster = true
 			neighbor.DDSeqNumber.Store(dd.Content.DDSeqNumber)
-			negotiationDone()
 		} else if !flags.IsBitSet(packet.DDOptionIbit) && !flags.IsBitSet(packet.DDOptionMSbit) &&
 			dd.Content.DDSeqNumber == neighbor.DDSeqNumber.Load() && neighbor.NeighborId < i.Area.ins.RouterId {
 			// The initialize(I) and master(MS) bits are off, the
@@ -210,10 +192,27 @@ func (a *Area) procDatabaseDesc(i *Interface, h *ipv4.Header, dd *packet.OSPFv2P
 			// Master.
 			logDebug("ExStart negotiation result: I am master")
 			neighbor.IsMaster = false
-			negotiationDone()
 		} else {
 			// Otherwise, the packet should be ignored.
 			return
+		}
+		// NegotiationDone here.
+		neighbor.consumeEvent(NbEvNegotiationDone)
+		// if the NegotiationDone event fired.
+		// the packet's Options field should be recorded in the
+		// neighbor structure's Neighbor Options field.
+		neighbor.NeighborOptions = packet.BitOption(dd.Content.Options)
+		neighbor.saveLastReceivedDD(dd)
+		if neighbor.IsMaster {
+			// im slave. prepare for dd exchange
+			logDebug("Slave sending out negotiation result ack and wait for first master sync")
+			// note that the dd echo is sent by fallthrough statement
+			neighbor.slavePrepareDDExchange()
+		} else {
+			// im master. starting dd exchange.
+			neighbor.consumeEvent(NbEvNegotiationDone)
+			logDebug("Master sending out first DD exchange because negotiation result ack received")
+			neighbor.masterStartDDExchange(dd)
 		}
 		// The packet should be accepted as next in sequence and processed
 		// further (see below).

@@ -73,12 +73,14 @@ func (p DbDescPayload) SerializeToSizedBuffer(b []byte) (err error) {
 	b[2] = uint8(p.Options)
 	b[3] = uint8(p.Flags)
 	binary.BigEndian.PutUint32(b[4:8], p.DDSeqNumber)
-	for idx, lsaH := range p.LSAinfo {
+	for idx := range len(p.LSAinfo) {
+		lsaH := p.LSAinfo[idx]
 		thisB := b[8+idx*lsaH.Size() : 8+(idx+1)*lsaH.Size()]
 		if err = lsaH.SerializeToSizedBuffer(thisB); err != nil {
 			return
 		}
 		lsaH.recalculateChecksum(thisB)
+		p.LSAinfo[idx] = lsaH
 	}
 	return
 }
@@ -175,13 +177,15 @@ func (p LSAcknowledgementPayload) SerializeToSizedBuffer(b []byte) (err error) {
 		return ErrBufferLengthTooShort
 	}
 	offset := 0
-	for _, h := range p {
+	for i := range len(p) {
+		h := p[i]
 		thisB := b[offset : offset+h.Size()]
 		if err = h.SerializeToSizedBuffer(thisB); err != nil {
 			return
 		}
 		h.recalculateChecksum(thisB)
 		offset += h.Size()
+		p[i] = h
 	}
 	return
 }
@@ -289,14 +293,22 @@ func (p LSAheader) Size() int {
 	return 20
 }
 
-func (p LSAheader) recalculateChecksum(b []byte) {
+func (p *LSAheader) recalculateChecksum(b []byte) {
 	// clear LS age before calculation
 	clear(b[0:2])
 	// clear chksum bytes
 	clear(b[16:18])
-	binary.BigEndian.PutUint16(b[16:18], lsaChecksum(b))
+	// fix length if it is not set
+	if p.Length <= 0 {
+		p.Length = uint16(p.Size())
+	}
+	binary.BigEndian.PutUint16(b[18:20], p.Length)
+	// save calculated chksum
+	p.LSChecksum = lsaChecksum(b)
+	binary.BigEndian.PutUint16(b[16:18], p.LSChecksum)
 	// add back LS age
 	binary.BigEndian.PutUint16(b[0:2], p.LSAge)
+
 }
 
 func (p LSAheader) SerializeToSizedBuffer(b []byte) error {

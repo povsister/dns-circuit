@@ -37,7 +37,6 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) *Interface {
 		ctx:                ctx,
 		cancel:             cancel,
 		c:                  conn,
-		wg:                 &sync.WaitGroup{},
 		pendingProcessPkt:  make(chan recvPkt, 20),
 		pendingSendPkt:     make(chan sendPkt, 20),
 		Type:               IfTypeBroadcast,
@@ -50,7 +49,6 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) *Interface {
 		OutputCost:         10,
 		RxmtInterval:       5,
 		InfTransDelay:      1,
-		nbMu:               &sync.RWMutex{},
 	}
 	ret.consumeEvent(IfEvInterfaceUp)
 	return ret
@@ -219,7 +217,7 @@ type Interface struct {
 	c      *Conn
 	ctx    context.Context
 	cancel context.CancelFunc
-	wg     *sync.WaitGroup
+	wg     sync.WaitGroup
 
 	pendingProcessPkt chan recvPkt
 	pendingSendPkt    chan sendPkt
@@ -297,7 +295,8 @@ type Interface struct {
 	//        indicating the lack of a Backup Designated Router.
 	BDR uint32
 
-	nbMu *sync.RWMutex
+	// guards Neighbors
+	nbMu sync.RWMutex
 	// The other routers attached to this network.  This list is formed
 	//        by the Hello Protocol.  Adjacencies will be formed to some of
 	//        these neighbors.  The set of adjacent neighbors can be
@@ -494,7 +493,7 @@ func (i *Interface) runReadLoop() {
 				}
 				payloadLen := n - ipv4.HeaderLen
 				if h != nil {
-					logDebug("Interface %s received %s->%s payloadSize(%d)", i.c.ifi.Name, h.Src.String(), h.Dst.String(), payloadLen)
+					logDebug("Received via Interface %s %s->%s payloadSize(%d)", i.c.ifi.Name, h.Src.String(), h.Dst.String(), payloadLen)
 				}
 				payload := make([]byte, payloadLen)
 				copy(payload, buf[ipv4.HeaderLen:n])
@@ -528,25 +527,31 @@ func (i *Interface) runSendLoop() {
 }
 
 func (i *Interface) doSendPkt(pkt sendPkt) (err error) {
+	dstIP := net.IPv4(byte(pkt.dst>>24), byte(pkt.dst>>16), byte(pkt.dst>>8), byte(pkt.dst))
+
 	p := gopacket.NewSerializeBuffer()
 	err = gopacket.SerializeLayers(p, gopacket.SerializeOptions{
 		FixLengths:       true,
 		ComputeChecksums: true,
 	}, pkt.p)
 	if err != nil {
-		logErr("Interface %s err marshal pending send Packet: %v", i.c.ifi.Name, err)
-		return nil
+		logErr("Interface %s err marshal pending send %s->%s %v Packet: %v", i.c.ifi.Name,
+			i.Address.IP.String(), dstIP.String(),
+			pkt.p.GetType(), err)
+		return
 	}
-	dstIP := net.IPv4(byte(pkt.dst>>24), byte(pkt.dst>>16), byte(pkt.dst>>8), byte(pkt.dst))
-	n, err := i.c.WriteTo(p.Bytes(), &net.IPAddr{
+
+	_, err = i.c.WriteTo(p.Bytes(), &net.IPAddr{
 		IP: dstIP,
 	})
 	if err != nil {
-		logErr("Interface %s err send %v Packet: %v", i.c.ifi.Name, pkt.p.GetType(), err)
-	} else {
-		logDebug("Interface %s sent %s->%s %v Packets(%d): \n%+v", i.c.ifi.Name,
+		logErr("Interface %s err send %s->%s %v Packet: %v", i.c.ifi.Name,
 			i.Address.IP.String(), dstIP.String(),
-			pkt.p.GetType(), n, pkt.p)
+			pkt.p.GetType(), err)
+	} else {
+		logDebug("Sent via Interface %s %s->%s %v Packet(%d): \n%+v", i.c.ifi.Name,
+			i.Address.IP.String(), dstIP.String(),
+			pkt.p.GetType(), len(p.Bytes()), pkt.p)
 	}
 	return
 }

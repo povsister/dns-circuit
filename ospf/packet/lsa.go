@@ -6,6 +6,16 @@ import (
 	"github.com/google/gopacket/layers"
 )
 
+// LSAIdentity The LS type, Link State ID, and Advertising Router fields
+// can uniquely identify an LSA.
+// If two LSAs have the same LS type, Link State ID, and Advertising Router fields,
+// the two LSAs are considered to be the same, with one being old and the other being new.
+type LSAIdentity struct {
+	LSType      uint16
+	LinkStateId uint32
+	AdvRouter   uint32
+}
+
 type LSAdvPayload interface {
 	V2RouterLSA | V2NetworkLSA |
 		V2SummaryLSAType3 | V2SummaryLSAType4 |

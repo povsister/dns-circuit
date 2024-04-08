@@ -18,7 +18,7 @@ var decOpts = gopacket.DecodeOptions{
 
 func (i *Interface) doReadDispatch(pkt recvPkt) {
 	dst := pkt.h.Dst
-	if dst.String() != AllSPFRouters && dst.String() != i.Address.IP.String() {
+	if dst.String() != AllSPFRouters && !dst.Equal(i.Address.IP) {
 		logWarn("Interface %s skipped 1 pkt processing causing its IPv4.Dst(%s)"+
 			" is neither AllSPFRouter(%s) nor interface addr(%s)", i.c.ifi.Name, dst.String(), AllSPFRouters, i.Address.IP.String())
 		return
@@ -42,7 +42,7 @@ func (i *Interface) queuePktForSend(pkt sendPkt) {
 	select {
 	case i.pendingSendPkt <- pkt:
 	default:
-		logWarn("Interface %s pending send pkt queue full. Dropped 1 pkt")
+		logWarn("Interface %s pending send pkt queue full. Dropped 1 %s pkt", pkt.p.GetType())
 	}
 }
 
@@ -79,14 +79,21 @@ func (i *Interface) doHello() (err error) {
 		ComputeChecksums: true,
 	}, hello)
 	if err != nil {
-		logErr("Interface %s err marshal interval HelloPacket: %v", i.c.ifi.Name, err)
+		logErr("Interface %s err marshal %s->%s interval Hello Packet: %v", i.c.ifi.Name,
+			i.Address.IP.String(), AllSPFRouters,
+			err)
 		return nil
 	}
-	n, err := i.c.WriteMulticastAllSPF(p.Bytes())
+	_, err = i.c.WriteMulticastAllSPF(p.Bytes())
 	if err != nil {
-		logErr("Interface %s err send interval HelloPacket: %v", i.c.ifi.Name, err)
+		logErr("Interface %s err send %s->%s interval Hello Packet: %v", i.c.ifi.Name,
+			i.Address.IP.String(), AllSPFRouters,
+			err)
 	} else {
-		logDebug("Interface %s sent interval HelloPackets(%d): \n%+v", i.c.ifi.Name, n, hello)
+		logDebug("Sent interval Hello Packet(%d) %s->%s via Interface %s:\n%+v", len(p.Bytes()),
+			i.Address.IP.String(), AllSPFRouters,
+			i.c.ifi.Name,
+			hello)
 	}
 	return err
 }
