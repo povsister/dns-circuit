@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/gopacket"
@@ -285,7 +286,7 @@ type Interface struct {
 	//        Designated Router's IP address.  The Designated Router is
 	//        initialized to 0.0.0.0, which indicates the lack of a Designated
 	//        Router.
-	DR uint32
+	DR atomic.Uint32
 	// The Backup Designated Router is also selected on all broadcast
 	//        and NBMA networks by the Hello Protocol.  All routers on the
 	//        attached network become adjacent to both the Designated Router
@@ -293,7 +294,7 @@ type Interface struct {
 	//        becomes Designated Router when the current Designated Router
 	//        fails.  The Backup Designated Router is initialized to 0.0.0.0,
 	//        indicating the lack of a Backup Designated Router.
-	BDR uint32
+	BDR atomic.Uint32
 
 	// guards Neighbors
 	nbMu sync.RWMutex

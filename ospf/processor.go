@@ -79,9 +79,10 @@ func (a *Area) procHello(i *Interface, h *ipv4.Header, hello *packet.OSPFv2Packe
 			}
 		}
 		if isMySelfSeen {
+			// for the reason that rt priority is always 0.
 			// just some handy addon
-			i.DR = neighbor.NeighborsDR
-			i.BDR = neighbor.NeighborsBDR
+			i.DR.Store(neighbor.NeighborsDR)
+			i.BDR.Store(neighbor.NeighborsBDR)
 			// If the router itself appears in this list, the
 			// neighbor state machine should be executed with the event 2-WayReceived.
 			neighbor.consumeEvent(NbEv2WayReceived)
