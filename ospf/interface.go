@@ -568,6 +568,16 @@ func (i *Interface) runHelloTicker() {
 		})
 }
 
+func (i *Interface) rangeOverNeighbors(fn func(nb *Neighbor) bool) {
+	i.nbMu.RLock()
+	defer i.nbMu.RUnlock()
+	for _, nb := range i.Neighbors {
+		if !fn(nb) {
+			break
+		}
+	}
+}
+
 func (i *Interface) getNeighbor(rtId uint32) (nb *Neighbor, ok bool) {
 	i.nbMu.RLock()
 	defer i.nbMu.RUnlock()

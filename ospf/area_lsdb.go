@@ -127,7 +127,7 @@ func (a *Area) getLSReqListFromDD(dd *packet.OSPFv2Packet[packet.DbDescPayload])
 	return
 }
 
-func (a *Area) respondLSR(n *Neighbor, reqs []packet.LSReq) (err error) {
+func (a *Area) respondLSReqWithLSU(n *Neighbor, reqs []packet.LSReq) (err error) {
 	// Each LSA specified in the Link State Request packet should be
 	//        located in the router's database, and copied into Link State
 	//        Update packets for transmission to the neighbor.  These LSAs
@@ -159,6 +159,26 @@ func (a *Area) respondLSR(n *Neighbor, reqs []packet.LSReq) (err error) {
 		},
 	}
 	n.i.queuePktForSend(pkt)
+	return
+}
+
+func (a *Area) hasNeighborStateIN(sts ...NeighborState) (ret bool) {
+	if len(sts) <= 0 {
+		return false
+	}
+	stLUT := make(map[NeighborState]bool, len(sts))
+	for _, st := range sts {
+		stLUT[st] = true
+	}
+	for _, ifi := range a.Interfaces {
+		ifi.rangeOverNeighbors(func(nb *Neighbor) bool {
+			if stLUT[nb.currState()] {
+				ret = true
+				return false
+			}
+			return true
+		})
+	}
 	return
 }
 

@@ -671,6 +671,17 @@ func (n *Neighbor) isLSReqListEmpty() bool {
 	return len(n.LSRequest) <= 0
 }
 
+func (n *Neighbor) isInLSReqList(l packet.LSAIdentity) bool {
+	n.lsReqRw.RLock()
+	defer n.lsReqRw.RUnlock()
+	for _, r := range n.LSRequest {
+		if r.GetLSAIdentity() == l {
+			return true
+		}
+	}
+	return false
+}
+
 func (n *Neighbor) appendLSReqList(lsrs ...packet.LSReq) {
 	n.lsReqRw.Lock()
 	defer n.lsReqRw.Unlock()

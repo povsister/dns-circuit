@@ -205,6 +205,24 @@ type LSAdvertisement struct {
 	Content LSAContent
 }
 
+func (p LSAdvertisement) ValidateLSA() error {
+	// (1) Validate the LSA's LS checksum.  If the checksum turns out to be
+	//        invalid, discard the LSA and get the next one from the Link
+	//        State Update packet.
+	// TODO: validate LSA chksum
+
+	// Examine the LSA's LS type.  If the LS type is unknown, discard
+	//        the LSA and get the next one from the Link State Update Packet.
+	//        This specification defines LS types 1-5 (see Section 4.3).
+	switch p.LSType {
+	case layers.RouterLSAtypeV2, layers.NetworkLSAtypeV2,
+		layers.SummaryLSANetworktypeV2, layers.SummaryLSAASBRtypeV2,
+		layers.ASExternalLSAtypeV2:
+		return nil
+	}
+	return fmt.Errorf("unknown LSA type %d", p.LSType)
+}
+
 func (pt *LSAdvertisement) parse() error {
 	pt.LSAheader = LSAheader(pt.LSA.LSAheader)
 	if int(pt.Length) < pt.LSAheader.Size() {
@@ -296,6 +314,10 @@ func (p LSAheader) GetLSAIdentity() LSAIdentity {
 		LinkStateId: p.LinkStateID,
 		AdvRouter:   p.AdvRouter,
 	}
+}
+
+func (p LSAheader) GetLSAck() LSAheader {
+	return p
 }
 
 func (p LSAheader) IsMoreRecentThan(toCompare LSAheader) bool {

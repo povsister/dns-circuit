@@ -343,7 +343,7 @@ func (a *Area) procLSR(i *Interface, h *ipv4.Header, lsr *packet.OSPFv2Packet[pa
 		// If an LSA cannot be found in the database,
 		// something has gone wrong with the Database Exchange process, and
 		// neighbor event BadLSReq should be generated.
-		if err := a.respondLSR(neighbor, lsr.Content); err != nil {
+		if err := a.respondLSReqWithLSU(neighbor, lsr.Content); err != nil {
 			logErr("Wrong LSRequest from RouterId: %v AreaId: %v: %v", neighbor.NeighborId, a.AreaId, err)
 			neighbor.consumeEvent(NbEvBadLSReq)
 		}
@@ -373,14 +373,126 @@ func (a *Area) procLSU(i *Interface, h *ipv4.Header, lsu *packet.OSPFv2Packet[pa
 
 	acks := make([]packet.LSAheader, 0, lsu.Content.NumOfLSAs)
 	for _, l := range lsu.Content.LSAs {
-		ack, err := a.tryLSDbUpdateByLSA(l)
+		err := l.ValidateLSA()
 		if err != nil {
-			logErr("Area %v err parse LSUpdate from neighbor %v: %v\n%+v", a.AreaId, neighbor.NeighborId,
-				err, l)
+			logErr("Wrong LSA from RouterId: %v AreaId: %v: %v", neighbor.NeighborId, a.AreaId)
 			continue
 		}
-		if ack.GetLSAIdentity() != packet.InvalidLSAIdentity {
-			acks = append(acks, ack)
+		// if this is an AS-external-LSA (LS type = 5), and the area
+		//        has been configured as a stub area, discard the LSA and get the
+		//        next one from the Link State Update Packet.  AS-external-LSAs
+		//        are not flooded into/throughout stub areas
+		if !a.ExternalRoutingCapability && l.LSType == layers.ASExternalLSAtypeV2 {
+			continue
+		}
+
+		fromLSDb, _, existInLSDB := a.lsDbGetLSAByIdentity(l.GetLSAIdentity(), false)
+		// if the LSA's LS age is equal to MaxAge, and there is
+		//        currently no instance of the LSA in the router's link state
+		//        database, and none of router's neighbors are in states Exchange
+		//        or Loading, then take the following actions: a) Acknowledge the
+		//        receipt of the LSA by sending a Link State Acknowledgment packet
+		//        back to the sending neighbor (see Section 13.5), and b) Discard
+		//        the LSA and examine the next LSA (if any) listed in the Link
+		//        State Update packet.
+		if l.LSAge == packet.MaxAge && !existInLSDB &&
+			!a.hasNeighborStateIN(NeighborExchange, NeighborLoading) {
+			acks = append(acks, l.GetLSAck())
+			continue
+		}
+
+		// Otherwise, find the instance of this LSA that is currently
+		//        contained in the router's link state database.  If there is no
+		//        database copy, or the received LSA is more recent than the
+		//        database copy (see Section 13.1 below for the determination of
+		//        which LSA is more recent) the following steps must be performed:
+		if !existInLSDB || l.IsMoreRecentThan(fromLSDb) {
+			// (a) If there is already a database copy, and if the database
+			//            copy was received via flooding and installed less than
+			//            MinLSArrival seconds ago, discard the new LSA (without
+			//            acknowledging it) and examine the next LSA (if any) listed
+			//            in the Link State Update packet.
+
+			// TODO:
+
+			// (b) Otherwise immediately flood the new LSA out some subset of
+			//            the router's interfaces (see Section 13.3).  In some cases
+			//            (e.g., the state of the receiving interface is DR and the
+			//            LSA was received from a router other than the Backup DR) the
+			//            LSA will be flooded back out the receiving interface.  This
+			//            occurrence should be noted for later use by the
+			//            acknowledgment process (Section 13.5).
+
+			// (c) Remove the current database copy from all neighbors' Link
+			//            state retransmission lists.
+
+			// (d) Install the new LSA in the link state database (replacing
+			//            the current database copy).  This may cause the routing
+			//            table calculation to be scheduled.  In addition, timestamp
+			//            the new LSA with the current time (i.e., the time it was
+			//            received).  The flooding procedure cannot overwrite the
+			//            newly installed LSA until MinLSArrival seconds have elapsed.
+			//            The LSA installation process is discussed further in Section
+			//            13.2.
+
+			// (e) Possibly acknowledge the receipt of the LSA by sending a
+			//            Link State Acknowledgment packet back out the receiving
+			//            interface.  This is explained below in Section 13.5.
+
+			// (f) If this new LSA indicates that it was originated by the
+			//            receiving router itself (i.e., is considered a self-
+			//            originated LSA), the router must take special action, either
+			//            updating the LSA or in some cases flushing it from the
+			//            routing domain. For a description of how self-originated
+			//            LSAs are detected and subsequently handled, see Section
+			//            13.4.
+
+		} else if neighbor.isInLSReqList(l.GetLSAIdentity()) {
+			// Else, if there is an instance of the LSA on the sending
+			//        neighbor's Link state request list, an error has occurred in the
+			//        Database Exchange process.  In this case, restart the Database
+			//        Exchange process by generating the neighbor event BadLSReq for
+			//        the sending neighbor and stop processing the Link State Update
+			//        packet.
+			neighbor.consumeEvent(NbEvBadLSReq)
+			return
+
+		} else if existInLSDB && !l.IsMoreRecentThan(fromLSDb) && !fromLSDb.IsMoreRecentThan(l.LSAheader) {
+			// Else, if the received LSA is the same instance as the database
+			//        copy (i.e., neither one is more recent) the following two steps
+			//        should be performed:
+
+			// (a) If the LSA is listed in the Link state retransmission list
+			//            for the receiving adjacency, the router itself is expecting
+			//            an acknowledgment for this LSA.  The router should treat the
+			//            received LSA as an acknowledgment by removing the LSA from
+			//            the Link state retransmission list.  This is termed an
+			//            "implied acknowledgment".  Its occurrence should be noted
+			//            for later use by the acknowledgment process (Section 13.5).
+
+			// (b) Possibly acknowledge the receipt of the LSA by sending a
+			//            Link State Acknowledgment packet back out the receiving
+			//            interface.  This is explained below in Section 13.5.
+
+			// TODO:
+
+		} else if existInLSDB && fromLSDb.IsMoreRecentThan(l.LSAheader) {
+			// Else, the database copy is more recent.  If the database copy
+			//        has LS age equal to MaxAge and LS sequence number equal to
+			//        MaxSequenceNumber, simply discard the received LSA without
+			//        acknowledging it. (In this case, the LSA's LS sequence number is
+			//        wrapping, and the MaxSequenceNumber LSA must be completely
+			//        flushed before any new LSA instance can be introduced).
+			//        Otherwise, as long as the database copy has not been sent in a
+			//        Link State Update within the last MinLSArrival seconds, send the
+			//        database copy back to the sending neighbor, encapsulated within
+			//        a Link State Update Packet. The Link State Update Packet should
+			//        be sent directly to the neighbor. In so doing, do not put the
+			//        database copy of the LSA on the neighbor's link state
+			//        retransmission list, and do not acknowledge the received (less
+			//        recent) LSA instance.
+
+			// TODO:
 		}
 	}
 	if len(acks) > 0 {
