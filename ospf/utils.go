@@ -30,6 +30,9 @@ func TimeTickerFunc(ctx context.Context, dur time.Duration, fn func()) *TickerFu
 		t:      time.NewTicker(dur),
 	}
 	go func() {
+		// immediate call the fn first
+		fn()
+		// then loop for cancel or tick
 		for {
 			select {
 			case <-ret.ctx.Done():
