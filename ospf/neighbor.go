@@ -96,6 +96,7 @@ type Neighbor struct {
 	// The functional level of the neighbor conversation.  This is
 	//        described in more detail in Section 10.1.
 	State NeighborState
+	stMu  sync.RWMutex
 	// A single shot timer whose firing indicates that no Hello Packet
 	//        has been seen from this neighbor recently.  The length of the
 	//        timer is RouterDeadInterval seconds.
@@ -188,10 +189,14 @@ type Neighbor struct {
 }
 
 func (n *Neighbor) currState() NeighborState {
+	n.stMu.RLock()
+	defer n.stMu.RUnlock()
 	return n.State
 }
 
 func (n *Neighbor) transState(target NeighborState) {
+	n.stMu.Lock()
+	defer n.stMu.Unlock()
 	var (
 		currState    = n.State
 		stateChanged = currState != target
