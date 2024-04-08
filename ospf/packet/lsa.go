@@ -42,8 +42,9 @@ type LegacyTOSInfo struct {
 
 type V2NetworkLSA layers.NetworkLSAV2
 
-// V2SummaryLSAType3 is alson known as ABR-SummaryLSA or SummaryLSA-IPNetwork
-type V2SummaryLSAType3 struct {
+// V2SummaryLSAImpl implements summary LSA marshaling.
+// The format of Type 3 and 4 summary-LSAs is identical.
+type V2SummaryLSAImpl struct {
 	// For Type 3 summary-LSAs, this indicates the destination
 	// network's IP address mask.  For example, when advertising the
 	// location of a class A network the value 0xff000000 would be
@@ -56,10 +57,16 @@ type V2SummaryLSAType3 struct {
 	Metric uint32
 }
 
+// V2SummaryLSAType3 is alson known as ABR-SummaryLSA or SummaryLSA-IPNetwork.
+// The format of Type 3 and 4 summary-LSAs is identical.
+type V2SummaryLSAType3 struct {
+	V2SummaryLSAImpl
+}
+
 // V2SummaryLSAType4 is also known as ASBR-Summary LSA.
 // The format of Type 3 and 4 summary-LSAs is identical.
 type V2SummaryLSAType4 struct {
-	V2SummaryLSAType3
+	V2SummaryLSAImpl
 }
 
 type V2ASExternalLSA layers.ASExternalLSAV2
@@ -130,13 +137,13 @@ func (p V2NetworkLSA) SerializeToSizedBuffer(b []byte) (err error) {
 	return
 }
 
-func (p V2SummaryLSAType3) isLSAContent() {}
+func (p V2SummaryLSAImpl) isLSAContent() {}
 
-func (p V2SummaryLSAType3) Size() int {
+func (p V2SummaryLSAImpl) Size() int {
 	return 8
 }
 
-func (p V2SummaryLSAType3) SerializeToSizedBuffer(b []byte) (err error) {
+func (p V2SummaryLSAImpl) SerializeToSizedBuffer(b []byte) (err error) {
 	if len(b) < p.Size() {
 		return ErrBufferLengthTooShort
 	}

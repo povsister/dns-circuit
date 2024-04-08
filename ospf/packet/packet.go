@@ -275,6 +275,14 @@ func lsaChecksum(b []byte) uint16 {
 	return (sum2 << 8) | sum1
 }
 
+// LSAheader
+// LS Type   Link State ID
+// _______________________________________________
+// 1         The originating router's Router ID.
+// 2         The IP interface address of the network's Designated Router.
+// 3         The destination network's IP address.
+// 4         The Router ID of the described AS boundary router.
+// 5         The destination network's IP address.
 type LSAheader layers.LSAheader
 
 func (p LSAheader) Size() int {
