@@ -272,7 +272,7 @@ func (p LSAdvertisement) Size() int {
 	return p.LSAheader.Size() + p.Content.Size()
 }
 
-func (p LSAdvertisement) SerializeToSizedBuffer(b []byte) (err error) {
+func (p *LSAdvertisement) SerializeToSizedBuffer(b []byte) (err error) {
 	if len(b) < p.Size() || len(b) < p.LSAheader.Size() || len(b) < p.Content.Size() {
 		return ErrBufferLengthTooShort
 	}
