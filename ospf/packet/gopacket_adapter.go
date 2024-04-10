@@ -103,7 +103,14 @@ func (p LSAdvertisement) AsV2RouterLSA() (ret LSAdv[V2RouterLSA], err error) {
 }
 
 func (p LSAdvertisement) AsV2NetworkLSA() (ret LSAdv[V2NetworkLSA], err error) {
-	// TODO
+	if p.LSA.Content == nil {
+		if ntLSA, ok := p.Content.(V2NetworkLSA); ok {
+			return LSAdv[V2NetworkLSA]{
+				LSAdvertisement: p,
+				Content:         ntLSA,
+			}, nil
+		}
+	}
 	if lsAdv, ok := p.LSA.Content.(layers.NetworkLSAV2); ok {
 		return LSAdv[V2NetworkLSA]{
 			LSAdvertisement: p,
@@ -125,7 +132,14 @@ func (p LSAdvertisement) AsV2SummaryLSAType4() (ret LSAdv[V2SummaryLSAType4], er
 }
 
 func (p LSAdvertisement) AsV2ASExternalLSA() (ret LSAdv[V2ASExternalLSA], err error) {
-	// TODO
+	if p.LSA.Content == nil {
+		if extLSA, ok := p.Content.(V2ASExternalLSA); ok {
+			return LSAdv[V2ASExternalLSA]{
+				LSAdvertisement: p,
+				Content:         extLSA,
+			}, nil
+		}
+	}
 	if lsAdv, ok := p.LSA.Content.(layers.ASExternalLSAV2); ok {
 		return LSAdv[V2ASExternalLSA]{
 			LSAdvertisement: p,
