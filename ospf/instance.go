@@ -120,17 +120,24 @@ func (i *Instance) agingExternalLSA() (maxAged []agedOutLSA) {
 }
 
 func (i *Instance) start() {
-	i.lsDbAgingTicker = TimeTickerFunc(i.ctx, time.Second, i.agingLSDB)
+	lastTotalMaxAged := 0
+	i.lsDbAgingTicker = TimeTickerFunc(i.ctx, time.Second, func() {
+		lastTotalMaxAged = i.agingLSDB(lastTotalMaxAged)
+	})
 	i.Backbone.start()
 }
 
-func (i *Instance) agingLSDB() {
+func (i *Instance) agingLSDB(lastTotalMaxAged int) int {
 	var totalMaxAged []agedOutLSA
 	totalMaxAged = append(totalMaxAged, i.Backbone.agingLSA()...)
 	for _, a := range i.Areas {
 		totalMaxAged = append(totalMaxAged, a.agingLSA()...)
 	}
 	totalMaxAged = append(totalMaxAged, i.agingExternalLSA()...)
+	if lastTotalMaxAged != len(totalMaxAged) {
+		logDebug("Aging LSDB done. Total max aged: %v\n%+v", len(totalMaxAged), totalMaxAged)
+	}
+	return len(totalMaxAged)
 }
 
 func (i *Instance) shutdown() {
