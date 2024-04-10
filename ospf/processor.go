@@ -370,8 +370,11 @@ func (a *Area) procLSU(i *Interface, h *ipv4.Header, lsu *packet.OSPFv2Packet[pa
 	// All types of LSAs, other than AS-external-LSAs, are associated with
 	// a specific area.  However, LSAs do not contain an area field.  An
 	// LSA's area must be deduced from the Link State Update packet header.
+	if lsu.AreaID != a.AreaId {
+		return
+	}
 
-	acks := make([]packet.LSAheader, 0, lsu.Content.NumOfLSAs)
+	delayedAcks := make([]packet.LSAheader, 0, lsu.Content.NumOfLSAs)
 	for _, l := range lsu.Content.LSAs {
 		err := l.ValidateLSA()
 		if err != nil {
@@ -386,7 +389,7 @@ func (a *Area) procLSU(i *Interface, h *ipv4.Header, lsu *packet.OSPFv2Packet[pa
 			continue
 		}
 
-		fromLSDb, _, existInLSDB := a.lsDbGetLSAByIdentity(l.GetLSAIdentity(), false)
+		lsaHdrFromLSDB, _, lsaMetaFromLSDB, existInLSDB := a.lsDbGetLSAByIdentity(l.GetLSAIdentity(), false)
 		// if the LSA's LS age is equal to MaxAge, and there is
 		//        currently no instance of the LSA in the router's link state
 		//        database, and none of router's neighbors are in states Exchange
@@ -397,23 +400,27 @@ func (a *Area) procLSU(i *Interface, h *ipv4.Header, lsu *packet.OSPFv2Packet[pa
 		//        State Update packet.
 		if l.LSAge == packet.MaxAge && !existInLSDB &&
 			!a.hasNeighborStateIN(NeighborExchange, NeighborLoading) {
-			acks = append(acks, l.GetLSAck())
+			// see RFC2328 13.5 Table 19.
+			// Direct ack should be sent whether this interface is DRBackup or not.
+			neighbor.directSendLSAck(l.GetLSAck())
 			continue
 		}
 
 		// Otherwise, find the instance of this LSA that is currently
-		//        contained in the router's link state database.  If there is no
-		//        database copy, or the received LSA is more recent than the
+		//        contained in the router's link state database.
+
+		// If there is no database copy, or the received LSA is more recent than the
 		//        database copy (see Section 13.1 below for the determination of
 		//        which LSA is more recent) the following steps must be performed:
-		if !existInLSDB || l.IsMoreRecentThan(fromLSDb) {
+		if !existInLSDB || l.IsMoreRecentThan(lsaHdrFromLSDB) {
 			// (a) If there is already a database copy, and if the database
 			//            copy was received via flooding and installed less than
 			//            MinLSArrival seconds ago, discard the new LSA (without
 			//            acknowledging it) and examine the next LSA (if any) listed
 			//            in the Link State Update packet.
-
-			// TODO:
+			if existInLSDB && lsaMetaFromLSDB.isReceivedLessThanMinLSArrival() {
+				continue
+			}
 
 			// (b) Otherwise immediately flood the new LSA out some subset of
 			//            the router's interfaces (see Section 13.3).  In some cases
@@ -422,9 +429,11 @@ func (a *Area) procLSU(i *Interface, h *ipv4.Header, lsu *packet.OSPFv2Packet[pa
 			//            LSA will be flooded back out the receiving interface.  This
 			//            occurrence should be noted for later use by the
 			//            acknowledgment process (Section 13.5).
+			// TODO 13 step 5 b
 
 			// (c) Remove the current database copy from all neighbors' Link
 			//            state retransmission lists.
+			a.removeAllNeighborsLSRetransmission(l.GetLSAIdentity())
 
 			// (d) Install the new LSA in the link state database (replacing
 			//            the current database copy).  This may cause the routing
@@ -434,10 +443,22 @@ func (a *Area) procLSU(i *Interface, h *ipv4.Header, lsu *packet.OSPFv2Packet[pa
 			//            newly installed LSA until MinLSArrival seconds have elapsed.
 			//            The LSA installation process is discussed further in Section
 			//            13.2.
+			a.lsDbInstallLSA(l)
 
 			// (e) Possibly acknowledge the receipt of the LSA by sending a
 			//            Link State Acknowledgment packet back out the receiving
 			//            interface.  This is explained below in Section 13.5.
+			if i.currState() == InterfaceBackup {
+				// Delayed ack should be sent if this LSA is received from DR,
+				// otherwise do nothing
+				if i.DR.Load() == neighbor.NeighborId {
+					delayedAcks = append(delayedAcks, l.GetLSAck())
+				}
+			} else {
+				// in all other state.
+				// Delayed ack should be sent.
+				delayedAcks = append(delayedAcks, l.GetLSAck())
+			}
 
 			// (f) If this new LSA indicates that it was originated by the
 			//            receiving router itself (i.e., is considered a self-
@@ -446,6 +467,32 @@ func (a *Area) procLSU(i *Interface, h *ipv4.Header, lsu *packet.OSPFv2Packet[pa
 			//            routing domain. For a description of how self-originated
 			//            LSAs are detected and subsequently handled, see Section
 			//            13.4.
+			if a.isSelfOriginatedLSA(l.LSAheader) {
+				// if the received self-originated LSA is newer than the
+				//        last instance that the router actually originated, the router
+				//        must take special action.  The reception of such an LSA
+				//        indicates that there are LSAs in the routing domain that were
+				//        originated by the router before the last time it was restarted.
+				//        In most cases, the router must then advance the LSA's LS
+				//        sequence number one past the received LS sequence number, and
+				//        originate a new instance of the LSA.
+				// It may be the case the router no longer wishes to originate the
+				//        received LSA. Possible examples include: 1) the LSA is a
+				//        summary-LSA or AS-external-LSA and the router no longer has an
+				//        (advertisable) route to the destination, 2) the LSA is a
+				//        network-LSA but the router is no longer Designated Router for
+				//        the network or 3) the LSA is a network-LSA whose Link State ID
+				//        is one of the router's own IP interface addresses but whose
+				//        Advertising Router is not equal to the router's own Router ID
+				//        (this latter case should be rare, and it indicates that the
+				//        router's Router ID has changed since originating the LSA).  In
+				//        all these cases, instead of updating the LSA, the LSA should be
+				//        flushed from the routing domain by incrementing the received
+				//        LSA's LS age to MaxAge and reflooding (see Section 14.1).
+				if existInLSDB && l.IsMoreRecentThan(lsaHdrFromLSDB) {
+					// TODO
+				}
+			}
 
 		} else if neighbor.isInLSReqList(l.GetLSAIdentity()) {
 			// Else, if there is an instance of the LSA on the sending
@@ -457,7 +504,7 @@ func (a *Area) procLSU(i *Interface, h *ipv4.Header, lsu *packet.OSPFv2Packet[pa
 			neighbor.consumeEvent(NbEvBadLSReq)
 			return
 
-		} else if existInLSDB && !l.IsMoreRecentThan(fromLSDb) && !fromLSDb.IsMoreRecentThan(l.LSAheader) {
+		} else if !l.IsSame(lsaHdrFromLSDB) {
 			// Else, if the received LSA is the same instance as the database
 			//        copy (i.e., neither one is more recent) the following two steps
 			//        should be performed:
@@ -469,14 +516,26 @@ func (a *Area) procLSU(i *Interface, h *ipv4.Header, lsu *packet.OSPFv2Packet[pa
 			//            the Link state retransmission list.  This is termed an
 			//            "implied acknowledgment".  Its occurrence should be noted
 			//            for later use by the acknowledgment process (Section 13.5).
-
 			// (b) Possibly acknowledge the receipt of the LSA by sending a
 			//            Link State Acknowledgment packet back out the receiving
 			//            interface.  This is explained below in Section 13.5.
+			if neighbor.isInLSRetransmissionList(l.GetLSAIdentity()) {
+				// This is an  "implied acknowledgment"
+				neighbor.removeFromLSRetransmissionList(l.GetLSAIdentity())
+				if i.currState() == InterfaceBackup {
+					// Delayed ack should be sent if received from DR.
+					// otherwise do nothing.
+					if i.DR.Load() == neighbor.NeighborId {
+						delayedAcks = append(delayedAcks, l.GetLSAck())
+					}
+				}
+			} else {
+				// LSA duplicated but is NOT "implied acknowledgment".
+				// Direct ack should be sent whether this interface is BackupDR or not.
+				neighbor.directSendLSAck(l.GetLSAck())
+			}
 
-			// TODO:
-
-		} else if existInLSDB && fromLSDb.IsMoreRecentThan(l.LSAheader) {
+		} else if lsaHdrFromLSDB.IsMoreRecentThan(l.LSAheader) {
 			// Else, the database copy is more recent.  If the database copy
 			//        has LS age equal to MaxAge and LS sequence number equal to
 			//        MaxSequenceNumber, simply discard the received LSA without
@@ -491,12 +550,42 @@ func (a *Area) procLSU(i *Interface, h *ipv4.Header, lsu *packet.OSPFv2Packet[pa
 			//        database copy of the LSA on the neighbor's link state
 			//        retransmission list, and do not acknowledge the received (less
 			//        recent) LSA instance.
-
-			// TODO:
+			if lsaHdrFromLSDB.LSAge == packet.MaxAge && lsaHdrFromLSDB.LSSeqNumber == packet.MaxSequenceNumber {
+				continue
+			} else if lsaMetaFromLSDB.isLastFloodTimeLongerThanMinLSArrival() {
+				neighbor.directSendLSU(lsaHdrFromLSDB.GetLSAIdentity())
+			}
+		} else {
+			panic("should never happen")
 		}
 	}
-	if len(acks) > 0 {
-		neighbor.ackLSAdvertisements(acks)
+	// All LSA has been processed, and direct ACK has been sent.
+	// Delayed acks should be sent out.
+	if len(delayedAcks) > 0 {
+		switch i.Type {
+		// On broadcast networks, this is
+		//        accomplished by sending the delayed Link State Acknowledgment
+		//        packets as multicasts.  The Destination IP address used depends
+		// 		  on the state of the interface.  If the interface state is DR or
+		//        Backup, the destination AllSPFRouters is used.  In all other
+		//        states, the destination AllDRouters is used.
+		case IfTypeBroadcast:
+			var dst uint32 = allDRouters
+			if i.currState() == InterfaceBackup || i.currState() == InterfaceDR {
+				dst = allSPFRouters
+			}
+			i.sendDelayedLSAcks(delayedAcks, dst)
+		default:
+			// On non-broadcast networks, delayed Link State Acknowledgment packets must be
+			// unicast separately over each adjacency (i.e., neighbor whose
+			// state is >= Exchange).
+			i.rangeOverNeighbors(func(nb *Neighbor) bool {
+				if nb.currState() >= NeighborExchange {
+					neighbor.directSendDelayedLSAcks(delayedAcks)
+				}
+				return true
+			})
+		}
 	}
 }
 
@@ -516,7 +605,7 @@ func (a *Area) procLSAck(i *Interface, h *ipv4.Header, lsack *packet.OSPFv2Packe
 
 	invalidAcks := neighbor.tryEmptyLSRetransmissionListByAck(lsack)
 	if len(invalidAcks) > 0 {
-		logWarn("Wrong LSAck from RouterId: %v AreaId: %v: \n%+v", neighbor.NeighborId, a.AreaId,
+		logWarn("Suspicious LSAck from RouterId: %v AreaId: %v: \n%+v", neighbor.NeighborId, a.AreaId,
 			invalidAcks)
 	}
 }

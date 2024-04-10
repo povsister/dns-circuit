@@ -2,6 +2,7 @@ package ospf
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/google/gopacket/layers"
 
@@ -62,6 +63,12 @@ func (a *Area) updateLSDBWhenInterfaceAdd(i *Interface) {
 	a.RouterLSAs[routerLSA.h.GetLSAIdentity()] = routerLSA
 }
 
+func (a *Area) lsDbInstallLSA(lsa packet.LSAdvertisement) {
+	a.lsDbRw.Lock()
+	defer a.lsDbRw.Unlock()
+
+}
+
 func (a *Area) lsDbGetDatabaseSummary() (ret []packet.LSAIdentity) {
 	a.lsDbRw.RLock()
 	defer a.lsDbRw.RUnlock()
@@ -72,51 +79,66 @@ func (a *Area) lsDbGetDatabaseSummary() (ret []packet.LSAIdentity) {
 }
 
 func (a *Area) lsDbGetLSAheaderByIdentity(ids ...packet.LSAIdentity) (ret []packet.LSAheader) {
-	a.lsDbRw.RLock()
-	defer a.lsDbRw.RUnlock()
 	for _, id := range ids {
-		if rtLSA, ok := a.RouterLSAs[id]; ok {
-			ret = append(ret, rtLSA.h)
+		if lsaH, _, _, ok := a.lsDbGetLSAByIdentity(id, false); ok {
+			ret = append(ret, lsaH)
 		}
 	}
 	return
 }
 
-func (a *Area) lsDbGetLSAByIdentity(id packet.LSAIdentity, includingDetail bool) (ret packet.LSAheader,
-	dt packet.LSAdvertisement, exist bool) {
-
+func (a *Area) lsDbGetLSAByIdentity(id packet.LSAIdentity, entireLSA bool) (lsaHdr packet.LSAheader,
+	fullLSA packet.LSAdvertisement, meta *lsaMeta, exist bool) {
 	a.lsDbRw.RLock()
 	defer a.lsDbRw.RUnlock()
 
 	switch id.LSType {
 	case layers.RouterLSAtypeV2:
 		if rtLSA, ok := a.RouterLSAs[id]; ok {
-			ret, exist = rtLSA.h, true
-			if includingDetail {
-				dt.LSAheader, dt.Content = rtLSA.h, rtLSA.l
+			lsaHdr, meta, exist = rtLSA.h, rtLSA.lsaMeta, true
+			if entireLSA {
+				fullLSA.LSAheader, fullLSA.Content = rtLSA.h, rtLSA.l
 			}
 		}
 	case layers.NetworkLSAtypeV2:
 		if ntLSA, ok := a.NetworkLSAs[id]; ok {
-			ret, exist = ntLSA.h, true
-			if includingDetail {
-				dt.LSAheader, dt.Content = ntLSA.h, ntLSA.l
+			lsaHdr, meta, exist = ntLSA.h, ntLSA.lsaMeta, true
+			if entireLSA {
+				fullLSA.LSAheader, fullLSA.Content = ntLSA.h, ntLSA.l
 			}
 		}
 	case layers.SummaryLSANetworktypeV2, layers.SummaryLSAASBRtypeV2:
 		if smLSA, ok := a.SummaryLSAs[id]; ok {
-			ret, exist = smLSA.h, true
-			if includingDetail {
-				dt.LSAheader, dt.Content = smLSA.h, smLSA.l
+			lsaHdr, meta, exist = smLSA.h, smLSA.lsaMeta, true
+			if entireLSA {
+				fullLSA.LSAheader, fullLSA.Content = smLSA.h, smLSA.l
 			}
 		}
 	}
 	return
 }
 
+func (lm *lsaMeta) isReceivedLessThanMinLSArrival() bool {
+	lm.rw.RLock()
+	defer lm.rw.RUnlock()
+	return time.Since(lm.ctime) <= packet.MinLSArrival*time.Second
+}
+
+func (lm *lsaMeta) isLastFloodTimeLongerThanMinLSArrival() bool {
+	lm.rw.RLock()
+	defer lm.rw.RUnlock()
+	return time.Since(lm.lastFloodTime) > packet.MinLSArrival*time.Second
+}
+
+func (lm *lsaMeta) updateLastFloodTime() {
+	lm.rw.Lock()
+	defer lm.rw.Unlock()
+	lm.lastFloodTime = time.Now()
+}
+
 func (a *Area) getLSReqListFromDD(dd *packet.OSPFv2Packet[packet.DbDescPayload]) (ret []packet.LSReq) {
 	for _, l := range dd.Content.LSAinfo {
-		if dbLSAh, _, exist := a.lsDbGetLSAByIdentity(l.GetLSAIdentity(), false); !exist {
+		if dbLSAh, _, _, exist := a.lsDbGetLSAByIdentity(l.GetLSAIdentity(), false); !exist {
 			// LSA not exist
 			ret = append(ret, l.GetLSReq())
 		} else if l.IsMoreRecentThan(dbLSAh) {
@@ -135,7 +157,7 @@ func (a *Area) respondLSReqWithLSU(n *Neighbor, reqs []packet.LSReq) (err error)
 	//        the neighbor.
 	lsas := make([]packet.LSAdvertisement, 0, len(reqs))
 	for _, r := range reqs {
-		if _, dt, exist := a.lsDbGetLSAByIdentity(r.GetLSAIdentity(), true); exist {
+		if _, dt, _, exist := a.lsDbGetLSAByIdentity(r.GetLSAIdentity(), true); exist {
 			lsas = append(lsas, dt)
 		} else {
 			return fmt.Errorf("requested LS(%+v) not exists in LSDB", r)
@@ -180,6 +202,29 @@ func (a *Area) hasNeighborStateIN(sts ...NeighborState) (ret bool) {
 		})
 	}
 	return
+}
+
+func (a *Area) removeAllNeighborsLSRetransmission(lsa packet.LSAIdentity) {
+	for _, ifi := range a.Interfaces {
+		ifi.rangeOverNeighbors(func(nb *Neighbor) bool {
+			nb.removeFromLSRetransmissionList(lsa)
+			return true
+		})
+	}
+}
+
+func (a *Area) isSelfOriginatedLSA(l packet.LSAheader) bool {
+	if l.AdvRouter == a.ins.RouterId {
+		return true
+	}
+	if l.LSType == layers.NetworkLSAtypeV2 {
+		for _, ifi := range a.Interfaces {
+			if l.LinkStateID == ipv4BytesToUint32(ifi.Address.IP.To4()) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (a *Area) tryLSDbUpdateByLSA(l packet.LSAdvertisement) (ack packet.LSAheader, err error) {

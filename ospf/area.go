@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"sync"
+	"time"
 
 	"github.com/povsister/dns-circuit/ospf/packet"
 )
@@ -120,18 +121,27 @@ type Area struct {
 }
 
 type LSDBRouterItem struct {
+	*lsaMeta
 	h packet.LSAheader
 	l packet.V2RouterLSA
 }
 
 type LSDBNetworkItem struct {
+	*lsaMeta
 	h packet.LSAheader
 	l packet.V2NetworkLSA
 }
 
 type LSDBSummaryItem struct {
+	*lsaMeta
 	h packet.LSAheader
 	l packet.V2SummaryLSAImpl
+}
+
+type lsaMeta struct {
+	rw            sync.RWMutex
+	ctime         time.Time
+	lastFloodTime time.Time
 }
 
 func (a *Area) start() {

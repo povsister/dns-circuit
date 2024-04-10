@@ -347,6 +347,10 @@ func (p LSAheader) IsMoreRecentThan(toCompare LSAheader) bool {
 	return false
 }
 
+func (p LSAheader) IsSame(toCompare LSAheader) bool {
+	return !p.IsMoreRecentThan(toCompare) && !toCompare.IsMoreRecentThan(p)
+}
+
 func (p LSAheader) GetLSReq() LSReq {
 	return LSReq{
 		LSType:    p.LSType,

@@ -23,6 +23,7 @@ const (
 	allSPFRouters = 224<<24 | 0<<16 | 0<<8 | 5
 	// AllDRouters 广播网络上，DR 和 BDR 必须准备接收发送到该地址的包. per RFC2328 A.1
 	AllDRouters = "224.0.0.6"
+	allDRouters = 224<<24 | 0<<16 | 0<<8 | 6
 
 	// IPProtocolNum OSPF申请的IP协议号. per RFC2328 A.1
 	IPProtocolNum = 89

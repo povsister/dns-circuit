@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/google/gopacket"
+	"github.com/google/gopacket/layers"
 	"golang.org/x/net/ipv4"
 
 	"github.com/povsister/dns-circuit/ospf/packet"
@@ -616,4 +617,18 @@ func (i *Interface) addNeighbor(h *ipv4.Header, hello *packet.OSPFv2Packet[packe
 	defer i.nbMu.Unlock()
 	i.Neighbors[hello.RouterID] = nb
 	return nb
+}
+
+func (i *Interface) sendDelayedLSAcks(lsacks []packet.LSAheader, dst uint32) {
+	p := &packet.OSPFv2Packet[packet.LSAcknowledgementPayload]{
+		OSPFv2: i.Area.ospfPktHeader(func(p *packet.LayerOSPFv2) {
+			p.Type = layers.OSPFLinkStateAcknowledgment
+		}),
+		Content: packet.LSAcknowledgementPayload(lsacks),
+	}
+	pkt := sendPkt{
+		dst: dst,
+		p:   p,
+	}
+	i.queuePktForSend(pkt)
 }

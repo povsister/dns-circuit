@@ -736,24 +736,112 @@ func (n *Neighbor) clearLSRetransmissionList() {
 }
 
 func (n *Neighbor) tryEmptyLSRetransmissionListByAck(lsAcks *packet.OSPFv2Packet[packet.LSAcknowledgementPayload]) (
-	invalidAcks []packet.LSAheader) {
+	suspiciousAcks []packet.LSAheader) {
 	n.lsRetransRw.Lock()
 	defer n.lsRetransRw.Unlock()
+
 	validAcks := make([]packet.LSAIdentity, 0, len(lsAcks.Content))
-	for _, ack := range lsAcks.Content {
+	validAckLUT := make(map[packet.LSAIdentity]int, len(lsAcks.Content))
+	for idx, ack := range lsAcks.Content {
 		id := ack.GetLSAIdentity()
 		if _, exist := n.LSRetransmission[id]; exist {
 			validAcks = append(validAcks, id)
+			validAckLUT[id] = idx
 		} else {
-			invalidAcks = append(invalidAcks, ack)
+			// if LSA acknowledged does not have an instance on the Link state retransmission list.
+			// silent discarded.
 		}
 	}
-	for _, vack := range validAcks {
-		delete(n.LSRetransmission, vack)
+	// validate it with LSDB
+	lsaHdrs := n.i.Area.lsDbGetLSAheaderByIdentity(validAcks...)
+	lsaHdrsIdLUT := make(map[packet.LSAIdentity]packet.LSAheader, len(lsaHdrs))
+	for _, lsaH := range lsaHdrs {
+		lsaHdrsIdLUT[lsaH.GetLSAIdentity()] = lsaH
+	}
+
+	for _, vAckId := range validAcks {
+		if lsaH, exist := lsaHdrsIdLUT[vAckId]; exist {
+			ackReceived := lsAcks.Content[validAckLUT[vAckId]]
+			// If the acknowledgment is for the same instance that is
+			//            contained on the list, remove the item from the list and
+			//            examine the next acknowledgment.
+			if lsaH.IsSame(ackReceived) {
+				delete(n.LSRetransmission, vAckId)
+			} else {
+				// Otherwise: Log the questionable acknowledgment, and examine the next
+				//            one.
+				suspiciousAcks = append(suspiciousAcks, ackReceived)
+			}
+		}
 	}
 	return
 }
 
-func (n *Neighbor) ackLSAdvertisements(acks []packet.LSAheader) {
+func (n *Neighbor) removeFromLSRetransmissionList(lsa packet.LSAIdentity) {
+	n.lsRetransRw.Lock()
+	defer n.lsRetransRw.Unlock()
+	delete(n.LSRetransmission, lsa)
+}
 
+func (n *Neighbor) isInLSRetransmissionList(l packet.LSAIdentity) bool {
+	n.lsRetransRw.RLock()
+	defer n.lsRetransRw.RUnlock()
+	_, exist := n.LSRetransmission[l]
+	return exist
+}
+
+func (n *Neighbor) directSendLSAck(ack packet.LSAheader) {
+	p := &packet.OSPFv2Packet[packet.LSAcknowledgementPayload]{
+		OSPFv2: n.i.Area.ospfPktHeader(func(p *packet.LayerOSPFv2) {
+			p.Type = layers.OSPFLinkStateAcknowledgment
+		}),
+		Content: packet.LSAcknowledgementPayload{
+			ack,
+		},
+	}
+	pkt := sendPkt{
+		dst: ipv4BytesToUint32(n.NeighborAddress.To4()),
+		p:   p,
+	}
+	n.i.queuePktForSend(pkt)
+}
+
+func (n *Neighbor) directSendLSU(id packet.LSAIdentity) {
+	_, lsa, meta, ok := n.i.Area.lsDbGetLSAByIdentity(id, true)
+	if !ok {
+		return
+	}
+	defer meta.updateLastFloodTime()
+	p := &packet.OSPFv2Packet[packet.LSUpdatePayload]{
+		OSPFv2: n.i.Area.ospfPktHeader(func(p *packet.LayerOSPFv2) {
+			p.Type = layers.OSPFLinkStateUpdate
+		}),
+		Content: packet.LSUpdatePayload{
+			LSUpdate: layers.LSUpdate{
+				NumOfLSAs: 1,
+			},
+			LSAs: []packet.LSAdvertisement{
+				lsa,
+			},
+		},
+	}
+	pkt := sendPkt{
+		dst: ipv4BytesToUint32(n.NeighborAddress.To4()),
+		p:   p,
+	}
+	n.i.queuePktForSend(pkt)
+}
+
+func (n *Neighbor) directSendDelayedLSAcks(acks []packet.LSAheader) {
+	p := &packet.OSPFv2Packet[packet.LSAcknowledgementPayload]{
+		OSPFv2: n.i.Area.ospfPktHeader(func(p *packet.LayerOSPFv2) {
+			p.Type = layers.OSPFLinkStateAcknowledgment
+		}),
+		Content: packet.LSAcknowledgementPayload(acks),
+	}
+	pkt := sendPkt{
+		dst: ipv4BytesToUint32(n.NeighborAddress.To4()),
+		p:   p,
+	}
+	n.i.queuePktForSend(pkt)
 }
