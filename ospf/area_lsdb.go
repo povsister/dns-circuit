@@ -69,8 +69,6 @@ func (a *Area) updateLSDBWhenInterfaceAdd(i *Interface) {
 }
 
 func (a *Area) lsDbInstallNewLSA(lsa packet.LSAdvertisement, isNeighborLSRxmChecked bool) {
-	a.lsDbRw.Lock()
-	defer a.lsDbRw.Unlock()
 	// Installing a new LSA in the database, either as the result of
 	//        flooding or a newly self-originated LSA, may cause the OSPF
 	//        routing table structure to be recalculated.  The contents of the
@@ -99,6 +97,8 @@ func (a *Area) lsDbInstallNewLSA(lsa packet.LSAdvertisement, isNeighborLSRxmChec
 	// Also, any old instance of the LSA must be removed from the
 	//        database when the new LSA is installed.
 	// This is done by overwriting with same LSIdentity.
+	a.lsDbRw.Lock()
+	defer a.lsDbRw.Unlock()
 	switch lsa.LSType {
 	case layers.RouterLSAtypeV2:
 		var item packet.LSAdv[packet.V2RouterLSA]
