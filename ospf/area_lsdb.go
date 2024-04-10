@@ -63,10 +63,90 @@ func (a *Area) updateLSDBWhenInterfaceAdd(i *Interface) {
 	a.RouterLSAs[routerLSA.h.GetLSAIdentity()] = routerLSA
 }
 
-func (a *Area) lsDbInstallLSA(lsa packet.LSAdvertisement) {
+func (a *Area) lsDbInstallNewLSA(lsa packet.LSAdvertisement) {
 	a.lsDbRw.Lock()
 	defer a.lsDbRw.Unlock()
+	// Installing a new LSA in the database, either as the result of
+	//        flooding or a newly self-originated LSA, may cause the OSPF
+	//        routing table structure to be recalculated.  The contents of the
+	//        new LSA should be compared to the old instance, if present.  If
+	//        there is no difference, there is no need to recalculate the
+	//        routing table. When comparing an LSA to its previous instance,
+	//        the following are all considered to be differences in contents:
+	h, _, _, exist := a.lsDbGetLSAByIdentity(lsa.GetLSAIdentity(), false)
+	// o   The LSA's Options field has changed.
+	// o   One of the LSA instances has LS age set to MaxAge, and he other does not.
+	// o   The length field in the LSA header has changed.
+	// o   The body of the LSA (i.e., anything outside the 20-byte LSA header) has changed.
+	//		Note that this excludes changes in LS Sequence Number and LS Checksum.
+	if !exist || h.LSOptions != lsa.LSOptions ||
+		(h.LSAge == packet.MaxAge && lsa.LSAge != packet.MaxAge) ||
+		(h.LSAge != packet.MaxAge && lsa.LSAge == packet.MaxAge) ||
+		h.Length != lsa.Length {
+		// TODO: compare LSA content
+		// If the contents are different, the following pieces of the
+		//        routing table must be recalculated, depending on the new LSA's
+		//        LS type field:
+		// TODO: recalculate route
+	}
+	// install new LSA into DB
+	var err error
+	// Also, any old instance of the LSA must be removed from the
+	//        database when the new LSA is installed.
+	// This is done by overwriting with same LSIdentity.
+	switch lsa.LSType {
+	case layers.RouterLSAtypeV2:
+		var item packet.LSAdv[packet.V2RouterLSA]
+		item, err = lsa.AsV2RouterLSA()
+		if err == nil {
+			a.RouterLSAs[lsa.GetLSAIdentity()] = &LSDBRouterItem{
+				lsaMeta: newLSAMeta(),
+				h:       item.LSAheader, l: item.Content,
+			}
+		}
+	case layers.NetworkLSAtypeV2:
+		var item packet.LSAdv[packet.V2NetworkLSA]
+		item, err = lsa.AsV2NetworkLSA()
+		if err == nil {
+			a.NetworkLSAs[lsa.GetLSAIdentity()] = &LSDBNetworkItem{
+				lsaMeta: newLSAMeta(),
+				h:       item.LSAheader, l: item.Content,
+			}
+		}
+	case layers.SummaryLSANetworktypeV2:
+		var item packet.LSAdv[packet.V2SummaryLSAType3]
+		item, err = lsa.AsV2SummaryLSAType3()
+		if err == nil {
+			a.SummaryLSAs[lsa.GetLSAIdentity()] = &LSDBSummaryItem{
+				lsaMeta: newLSAMeta(),
+				h:       item.LSAheader, l: item.Content.V2SummaryLSAImpl,
+			}
+		}
+	case layers.SummaryLSAASBRtypeV2:
+		var item packet.LSAdv[packet.V2SummaryLSAType4]
+		item, err = lsa.AsV2SummaryLSAType4()
+		if err == nil {
+			a.SummaryLSAs[lsa.GetLSAIdentity()] = &LSDBSummaryItem{
+				lsaMeta: newLSAMeta(),
+				h:       item.LSAheader, l: item.Content.V2SummaryLSAImpl,
+			}
+		}
+	case layers.ASExternalLSAtypeV2:
+		// TODO: deal with ASExternal LSA
+		err = fmt.Errorf("unimplemented")
+	}
+	if err != nil {
+		logErr("Area %v err install LSA: %v\n%+v", a.AreaId, err, lsa)
+	} else {
+		// This old instance must also be removed from all neighbors' Link state retransmission lists (see Section 10).
+		a.removeAllNeighborsLSRetransmission(h.GetLSAIdentity())
+	}
+}
 
+func newLSAMeta() *lsaMeta {
+	return &lsaMeta{
+		ctime: time.Now(),
+	}
 }
 
 func (a *Area) lsDbGetDatabaseSummary() (ret []packet.LSAIdentity) {
@@ -225,9 +305,4 @@ func (a *Area) isSelfOriginatedLSA(l packet.LSAheader) bool {
 		}
 	}
 	return false
-}
-
-func (a *Area) tryLSDbUpdateByLSA(l packet.LSAdvertisement) (ack packet.LSAheader, err error) {
-	// TODO:
-	return
 }

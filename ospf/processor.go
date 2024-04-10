@@ -443,7 +443,7 @@ func (a *Area) procLSU(i *Interface, h *ipv4.Header, lsu *packet.OSPFv2Packet[pa
 			//            newly installed LSA until MinLSArrival seconds have elapsed.
 			//            The LSA installation process is discussed further in Section
 			//            13.2.
-			a.lsDbInstallLSA(l)
+			a.lsDbInstallNewLSA(l)
 
 			// (e) Possibly acknowledge the receipt of the LSA by sending a
 			//            Link State Acknowledgment packet back out the receiving
