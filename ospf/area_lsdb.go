@@ -63,7 +63,7 @@ func (a *Area) updateLSDBWhenInterfaceAdd(i *Interface) {
 	a.RouterLSAs[routerLSA.h.GetLSAIdentity()] = routerLSA
 }
 
-func (a *Area) lsDbInstallNewLSA(lsa packet.LSAdvertisement) {
+func (a *Area) lsDbInstallNewLSA(lsa packet.LSAdvertisement, isNeighborLSRxmChecked bool) {
 	a.lsDbRw.Lock()
 	defer a.lsDbRw.Unlock()
 	// Installing a new LSA in the database, either as the result of
@@ -137,7 +137,7 @@ func (a *Area) lsDbInstallNewLSA(lsa packet.LSAdvertisement) {
 	}
 	if err != nil {
 		logErr("Area %v err install LSA: %v\n%+v", a.AreaId, err, lsa)
-	} else {
+	} else if !isNeighborLSRxmChecked {
 		// This old instance must also be removed from all neighbors' Link state retransmission lists (see Section 10).
 		a.removeAllNeighborsLSRetransmission(h.GetLSAIdentity())
 	}
@@ -216,14 +216,14 @@ func (lm *lsaMeta) updateLastFloodTime() {
 	lm.lastFloodTime = time.Now()
 }
 
-func (a *Area) getLSReqListFromDD(dd *packet.OSPFv2Packet[packet.DbDescPayload]) (ret []packet.LSReq) {
+func (a *Area) getLSReqListFromDD(dd *packet.OSPFv2Packet[packet.DbDescPayload]) (ret []packet.LSAheader) {
 	for _, l := range dd.Content.LSAinfo {
 		if dbLSAh, _, _, exist := a.lsDbGetLSAByIdentity(l.GetLSAIdentity(), false); !exist {
 			// LSA not exist
-			ret = append(ret, l.GetLSReq())
+			ret = append(ret, l)
 		} else if l.IsMoreRecentThan(dbLSAh) {
 			// neighbors LSA is newer
-			ret = append(ret, l.GetLSReq())
+			ret = append(ret, l)
 		}
 	}
 	return

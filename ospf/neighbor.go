@@ -3,6 +3,7 @@ package ospf
 import (
 	"math"
 	"net"
+	"slices"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -169,8 +170,9 @@ type Neighbor struct {
 	// The list of LSAs that have been flooded but not acknowledged on
 	//        this adjacency.  These will be retransmitted at intervals until
 	//        they are acknowledged, or until the adjacency is destroyed.
-	LSRetransmission map[packet.LSAIdentity]struct{}
-	lsRetransRw      sync.RWMutex
+	LSRetransmission       map[packet.LSAIdentity]struct{}
+	lsRetransRw            sync.RWMutex
+	lsRetransmissionTicker *TickerFunc
 
 	// The complete list of LSAs that make up the area link-state
 	//        database, at the moment the neighbor goes into Database Exchange
@@ -183,7 +185,7 @@ type Neighbor struct {
 	//        received, and is then sent to the neighbor in Link State Request
 	//        packets.  The list is depleted as appropriate Link State Update
 	//        packets are received.
-	LSRequest                 []packet.LSReq
+	LSRequest                 []packet.LSAheader
 	lsReqRw                   sync.RWMutex
 	lsReqRetransmissionTicker *TickerFunc
 }
@@ -687,7 +689,26 @@ func (n *Neighbor) isInLSReqList(l packet.LSAIdentity) bool {
 	return false
 }
 
-func (n *Neighbor) appendLSReqList(lsrs ...packet.LSReq) {
+func (n *Neighbor) getFromLSReqList(l packet.LSAIdentity) (lsaH packet.LSAheader, ok bool) {
+	n.lsReqRw.RLock()
+	defer n.lsReqRw.RUnlock()
+	for _, r := range n.LSRequest {
+		if r.GetLSAIdentity() == l {
+			return r, true
+		}
+	}
+	return
+}
+
+func (n *Neighbor) deleteFromLSReqList(l packet.LSAIdentity) {
+	n.lsReqRw.Lock()
+	defer n.lsReqRw.Unlock()
+	n.LSRequest = slices.DeleteFunc(n.LSRequest, func(r packet.LSAheader) bool {
+		return r.GetLSAIdentity() == l
+	})
+}
+
+func (n *Neighbor) appendLSReqList(lsrs ...packet.LSAheader) {
 	n.lsReqRw.Lock()
 	defer n.lsReqRw.Unlock()
 	n.LSRequest = append(n.LSRequest, lsrs...)
@@ -715,7 +736,7 @@ func (n *Neighbor) sendOutTopLSR() int {
 	if len(n.LSRequest) <= 0 {
 		return 0
 	}
-	firstReq := n.LSRequest[0]
+	firstReq := n.LSRequest[0].GetLSReq()
 	lsr := &packet.OSPFv2Packet[packet.LSRequestPayload]{
 		OSPFv2: n.i.Area.ospfPktHeader(func(p *packet.LayerOSPFv2) {
 			p.Type = layers.OSPFLinkStateRequest
@@ -775,6 +796,44 @@ func (n *Neighbor) tryEmptyLSRetransmissionListByAck(lsAcks *packet.OSPFv2Packet
 		}
 	}
 	return
+}
+
+func (n *Neighbor) addToLSRetransmissionList(l packet.LSAIdentity) {
+	n.lsRetransRw.Lock()
+	defer n.lsRetransRw.Unlock()
+	if n.lsRetransmissionTicker == nil {
+		n.lsRetransmissionTicker = TimeTickerFunc(n.i.ctx, time.Duration(n.i.RxmtInterval)*time.Second,
+			n.doLSRetransmission, true)
+	}
+	//n.lsRetransmissionTicker.Reset()
+	n.LSRetransmission[l] = struct{}{}
+}
+
+func (n *Neighbor) doLSRetransmission() {
+	n.lsRetransRw.RLock()
+	defer n.lsRetransRw.RUnlock()
+	for l := range n.LSRetransmission {
+		_, lsa, meta, ok := n.i.Area.lsDbGetLSAByIdentity(l, true)
+		if !ok {
+			continue
+		}
+		lsa.LSAge = lsa.Ager(n.i.InfTransDelay)
+		p := &packet.OSPFv2Packet[packet.LSUpdatePayload]{
+			OSPFv2: n.i.Area.ospfPktHeader(func(p *packet.LayerOSPFv2) {
+				p.Type = layers.OSPFLinkStateUpdate
+			}),
+			Content: packet.LSUpdatePayload{
+				LSUpdate: layers.LSUpdate{NumOfLSAs: 1},
+				LSAs:     []packet.LSAdvertisement{lsa},
+			},
+		}
+		pkt := sendPkt{
+			dst: ipv4BytesToUint32(n.NeighborAddress.To4()),
+			p:   p,
+		}
+		meta.updateLastFloodTime()
+		n.i.queuePktForSend(pkt)
+	}
 }
 
 func (n *Neighbor) removeFromLSRetransmissionList(lsa packet.LSAIdentity) {

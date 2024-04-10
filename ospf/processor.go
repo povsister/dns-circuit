@@ -422,18 +422,13 @@ func (a *Area) procLSU(i *Interface, h *ipv4.Header, lsu *packet.OSPFv2Packet[pa
 				continue
 			}
 
-			// (b) Otherwise immediately flood the new LSA out some subset of
-			//            the router's interfaces (see Section 13.3).  In some cases
-			//            (e.g., the state of the receiving interface is DR and the
-			//            LSA was received from a router other than the Backup DR) the
-			//            LSA will be flooded back out the receiving interface.  This
-			//            occurrence should be noted for later use by the
-			//            acknowledgment process (Section 13.5).
-			// TODO 13 step 5 b
-
 			// (c) Remove the current database copy from all neighbors' Link
 			//            state retransmission lists.
-			a.removeAllNeighborsLSRetransmission(l.GetLSAIdentity())
+			neighborLSRxmChecked := false
+			if existInLSDB {
+				a.removeAllNeighborsLSRetransmission(lsaHdrFromLSDB.GetLSAIdentity())
+				neighborLSRxmChecked = true
+			}
 
 			// (d) Install the new LSA in the link state database (replacing
 			//            the current database copy).  This may cause the routing
@@ -443,7 +438,17 @@ func (a *Area) procLSU(i *Interface, h *ipv4.Header, lsu *packet.OSPFv2Packet[pa
 			//            newly installed LSA until MinLSArrival seconds have elapsed.
 			//            The LSA installation process is discussed further in Section
 			//            13.2.
-			a.lsDbInstallNewLSA(l)
+			a.lsDbInstallNewLSA(l, neighborLSRxmChecked)
+
+			// (b) Otherwise immediately flood the new LSA out some subset of
+			//            the router's interfaces (see Section 13.3).  In some cases
+			//            (e.g., the state of the receiving interface is DR and the
+			//            LSA was received from a router other than the Backup DR) the
+			//            LSA will be flooded back out the receiving interface.  This
+			//            occurrence should be noted for later use by the
+			//            acknowledgment process (Section 13.5).
+			// 调整一下顺序，因为目前flooding依赖从LSDB读取LSA，所以先install LSA
+			a.ins.floodLSA(a, i, l, lsu)
 
 			// (e) Possibly acknowledge the receipt of the LSA by sending a
 			//            Link State Acknowledgment packet back out the receiving
@@ -490,7 +495,7 @@ func (a *Area) procLSU(i *Interface, h *ipv4.Header, lsu *packet.OSPFv2Packet[pa
 				//        flushed from the routing domain by incrementing the received
 				//        LSA's LS age to MaxAge and reflooding (see Section 14.1).
 				if existInLSDB && l.IsMoreRecentThan(lsaHdrFromLSDB) {
-					// TODO
+					// TODO: deal with self-originated LSA
 				}
 			}
 
@@ -504,7 +509,7 @@ func (a *Area) procLSU(i *Interface, h *ipv4.Header, lsu *packet.OSPFv2Packet[pa
 			neighbor.consumeEvent(NbEvBadLSReq)
 			return
 
-		} else if !l.IsSame(lsaHdrFromLSDB) {
+		} else if l.IsSame(lsaHdrFromLSDB) {
 			// Else, if the received LSA is the same instance as the database
 			//        copy (i.e., neither one is more recent) the following two steps
 			//        should be performed:

@@ -363,6 +363,13 @@ func (p LSAheader) Size() int {
 	return 20
 }
 
+func (p LSAheader) Ager(t uint16) uint16 {
+	if p.LSAge+t > MaxAge {
+		return p.LSAge
+	}
+	return p.LSAge + 1
+}
+
 func (p *LSAheader) recalculateChecksum(b []byte) {
 	// clear LS age before calculation
 	clear(b[0:2])

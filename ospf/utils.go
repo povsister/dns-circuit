@@ -19,19 +19,25 @@ func ipv4MaskToUint32(b []byte) uint32 {
 type TickerFunc struct {
 	ctx    context.Context
 	cancel context.CancelFunc
+	dur    time.Duration
+	fn     func()
 	t      *time.Ticker
 }
 
-func TimeTickerFunc(ctx context.Context, dur time.Duration, fn func()) *TickerFunc {
+func TimeTickerFunc(ctx context.Context, dur time.Duration, fn func(), waitForTicker ...bool) *TickerFunc {
 	ctx, cancel := context.WithCancel(ctx)
 	ret := &TickerFunc{
 		ctx:    ctx,
 		cancel: cancel,
+		dur:    dur,
+		fn:     fn,
 		t:      time.NewTicker(dur),
 	}
 	go func() {
-		// immediate call the fn first
-		fn()
+		// immediate call the fn first if do not wait for ticker
+		if !(len(waitForTicker) > 0 && waitForTicker[0]) {
+			fn()
+		}
 		// then loop for cancel or tick
 		for {
 			select {
@@ -49,6 +55,21 @@ func TimeTickerFunc(ctx context.Context, dur time.Duration, fn func()) *TickerFu
 func (t *TickerFunc) Stop() {
 	if t != nil {
 		t.cancel()
+	}
+}
+
+func (t *TickerFunc) Reset() {
+	if t != nil {
+		t.t.Reset(t.dur)
+	}
+}
+
+// DoFnNow 暂停ticker并立即执行一次fn，随后恢复tick
+func (t *TickerFunc) DoFnNow() {
+	if t != nil && t.ctx.Err() == nil {
+		t.t.Stop()
+		t.fn()
+		t.t.Reset(t.dur)
 	}
 }
 

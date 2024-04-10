@@ -328,7 +328,7 @@ type Interface struct {
 	//            account the transmission and propagation delays of the
 	//            interface.  It must be greater than 0.  Sample value for a
 	//            local area network: 1 second.
-	InfTransDelay int
+	InfTransDelay uint16
 
 	// TODO
 	AuType string
@@ -631,4 +631,33 @@ func (i *Interface) sendDelayedLSAcks(lsacks []packet.LSAheader, dst uint32) {
 		p:   p,
 	}
 	i.queuePktForSend(pkt)
+}
+
+func (i *Interface) sendLSUFlood(l packet.LSAIdentity, dst uint32) {
+	_, lsa, meta, ok := i.Area.lsDbGetLSAByIdentity(l, true)
+	if !ok {
+		return
+	}
+	defer meta.updateLastFloodTime()
+	p := &packet.OSPFv2Packet[packet.LSUpdatePayload]{
+		OSPFv2: i.Area.ospfPktHeader(func(p *packet.LayerOSPFv2) {
+			p.Type = layers.OSPFLinkStateUpdate
+		}),
+		Content: packet.LSUpdatePayload{
+			LSUpdate: layers.LSUpdate{NumOfLSAs: 1},
+			LSAs:     []packet.LSAdvertisement{lsa},
+		},
+	}
+	pkt := sendPkt{
+		dst: dst,
+		p:   p,
+	}
+	i.queuePktForSend(pkt)
+}
+
+func (i *Interface) immediateTickNeighborsRetransmissionList() {
+	i.rangeOverNeighbors(func(nb *Neighbor) bool {
+		nb.lsRetransmissionTicker.DoFnNow()
+		return true
+	})
 }
