@@ -46,7 +46,7 @@ func (a *Area) updateLSDBWhenInterfaceAdd(i *Interface) {
 						// 2      IP address of Designated Router
 						// 3      IP network/subnet number
 						// 4      Neighboring router's Router ID
-						LinkID: i.DR.Load(),
+						LinkID: i.DR.Load(), // TODO: fix DR change event
 						//连接数据，其值取决于连接的类型：
 						//unnumbered P2P：接口的索引值。
 						//Stub网络：子网掩码。

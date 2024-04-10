@@ -162,7 +162,7 @@ type lsaMeta struct {
 func (lm *lsaMeta) age() uint16 {
 	age := time.Since(lm.ctime)
 	if age >= 0 && age <= time.Second*packet.MaxAge {
-		return uint16(age)
+		return uint16(age.Seconds())
 	}
 	return packet.MaxAge
 }

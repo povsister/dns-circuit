@@ -8,6 +8,8 @@ require (
 	golang.org/x/net v0.14.0
 )
 
+replace github.com/google/gopacket v1.1.20-0.20220810144506-32ee38206866 => github.com/povsister/gopacket v0.0.0-20240410122921-c862d3d58aad
+
 require (
 	github.com/adrg/xdg v0.4.0 // indirect
 	github.com/aead/cmac v0.0.0-20160719120800-7af84192f0b1 // indirect
