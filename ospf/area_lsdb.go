@@ -319,3 +319,26 @@ func (a *Area) isSelfOriginatedLSA(l packet.LSAheader) bool {
 	}
 	return false
 }
+
+func (a *Area) agingLSA() (maxAged []packet.LSAIdentity) {
+	a.lsDbRw.Lock()
+	defer a.lsDbRw.Unlock()
+
+	for id, l := range a.RouterLSAs {
+		if l.aging() >= packet.MaxAge {
+			maxAged = append(maxAged, id)
+		}
+	}
+	for id, l := range a.NetworkLSAs {
+		if l.aging() >= packet.MaxAge {
+			maxAged = append(maxAged, id)
+		}
+	}
+	for id, l := range a.SummaryLSAs {
+		if l.aging() >= packet.MaxAge {
+			maxAged = append(maxAged, id)
+		}
+	}
+
+	return
+}

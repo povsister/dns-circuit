@@ -126,10 +126,20 @@ type LSDBRouterItem struct {
 	l packet.V2RouterLSA
 }
 
+func (l *LSDBRouterItem) aging() uint16 {
+	l.h.LSAge = l.age()
+	return l.h.LSAge
+}
+
 type LSDBNetworkItem struct {
 	*lsaMeta
 	h packet.LSAheader
 	l packet.V2NetworkLSA
+}
+
+func (l *LSDBNetworkItem) aging() uint16 {
+	l.h.LSAge = l.age()
+	return l.h.LSAge
 }
 
 type LSDBSummaryItem struct {
@@ -138,10 +148,23 @@ type LSDBSummaryItem struct {
 	l packet.V2SummaryLSAImpl
 }
 
+func (l *LSDBSummaryItem) aging() uint16 {
+	l.h.LSAge = l.age()
+	return l.h.LSAge
+}
+
 type lsaMeta struct {
 	rw            sync.RWMutex
 	ctime         time.Time
 	lastFloodTime time.Time
+}
+
+func (lm *lsaMeta) age() uint16 {
+	age := time.Since(lm.ctime)
+	if age >= 0 && age <= time.Second*packet.MaxAge {
+		return uint16(age)
+	}
+	return packet.MaxAge
 }
 
 func (a *Area) start() {

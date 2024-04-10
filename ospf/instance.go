@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"sync"
+	"time"
 
 	"github.com/google/gopacket/layers"
 
@@ -20,6 +21,7 @@ type InstanceConfig struct {
 
 func NewInstance(ctx context.Context, c *InstanceConfig) *Instance {
 	ins := &Instance{
+		ctx:      ctx,
 		RouterId: c.RouterId,
 	}
 	ins.Backbone = NewArea(ctx, &AreaConfig{
@@ -41,6 +43,8 @@ func NewInstance(ctx context.Context, c *InstanceConfig) *Instance {
 }
 
 type Instance struct {
+	ctx context.Context
+
 	RouterId uint32
 	// The OSPF backbone area is responsible for the dissemination of
 	//        inter-area routing information.
@@ -62,6 +66,7 @@ type Instance struct {
 	//        the router into the OSPF routing domain via AS-external-LSAs.
 	ExternalRoutes *RoutingTable
 
+	lsDbAgingTicker *TickerFunc
 	// Part of the link-state database.  These have originated from the
 	//        AS boundary routers.  They comprise routes to destinations
 	//        external to the Autonomous System.  Note that, if the router is
@@ -83,6 +88,11 @@ type LSDBASExternalItem struct {
 	l packet.V2ASExternalLSA
 }
 
+func (l *LSDBASExternalItem) aging() uint16 {
+	l.h.LSAge = l.age()
+	return l.h.LSAge
+}
+
 func (i *Instance) lsDbGetExtLSA(id packet.LSAIdentity) (*LSDBASExternalItem, bool) {
 	i.extRw.RLock()
 	defer i.extRw.RUnlock()
@@ -96,8 +106,29 @@ func (i *Instance) lsDbSetExtLSA(id packet.LSAIdentity, item *LSDBASExternalItem
 	i.ASExternalLSAs[id] = item
 }
 
+func (i *Instance) agingExternalLSA() (maxAged []packet.LSAIdentity) {
+	i.extRw.Lock()
+	defer i.extRw.Unlock()
+	for id, l := range i.ASExternalLSAs {
+		if l.aging() >= packet.MaxAge {
+			maxAged = append(maxAged, id)
+		}
+	}
+	return
+}
+
 func (i *Instance) start() {
+	i.lsDbAgingTicker = TimeTickerFunc(i.ctx, time.Second, i.agingLSDB)
 	i.Backbone.start()
+}
+
+func (i *Instance) agingLSDB() {
+	var totalMaxAged []packet.LSAIdentity
+	totalMaxAged = append(totalMaxAged, i.Backbone.agingLSA()...)
+	for _, a := range i.Areas {
+		totalMaxAged = append(totalMaxAged, a.agingLSA()...)
+	}
+	totalMaxAged = append(totalMaxAged, i.agingExternalLSA()...)
 }
 
 func (i *Instance) shutdown() {
