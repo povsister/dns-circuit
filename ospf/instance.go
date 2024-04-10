@@ -106,12 +106,14 @@ func (i *Instance) lsDbSetExtLSA(id packet.LSAIdentity, item *LSDBASExternalItem
 	i.ASExternalLSAs[id] = item
 }
 
-func (i *Instance) agingExternalLSA() (maxAged []packet.LSAIdentity) {
+func (i *Instance) agingExternalLSA() (maxAged []agedOutLSA) {
 	i.extRw.Lock()
 	defer i.extRw.Unlock()
 	for id, l := range i.ASExternalLSAs {
 		if l.aging() >= packet.MaxAge {
-			maxAged = append(maxAged, id)
+			maxAged = append(maxAged, agedOutLSA{
+				id, l.h.AdvRouter == i.RouterId,
+			})
 		}
 	}
 	return
@@ -123,7 +125,7 @@ func (i *Instance) start() {
 }
 
 func (i *Instance) agingLSDB() {
-	var totalMaxAged []packet.LSAIdentity
+	var totalMaxAged []agedOutLSA
 	totalMaxAged = append(totalMaxAged, i.Backbone.agingLSA()...)
 	for _, a := range i.Areas {
 		totalMaxAged = append(totalMaxAged, a.agingLSA()...)

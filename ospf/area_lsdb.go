@@ -10,8 +10,8 @@ import (
 )
 
 func (a *Area) updateLSDBWhenInterfaceAdd(i *Interface) {
-	routerLSA := &LSDBRouterItem{
-		h: packet.LSAheader{
+	routerLSA := packet.LSAdvertisement{
+		LSAheader: packet.LSAheader{
 			LSType: layers.RouterLSAtypeV2,
 			// LS Type   Link State ID
 			// _______________________________________________
@@ -25,7 +25,7 @@ func (a *Area) updateLSDBWhenInterfaceAdd(i *Interface) {
 			LSSeqNumber: packet.InitialSequenceNumber,
 			LSOptions:   uint8(packet.BitOption(0).SetBit(packet.CapabilityEbit)),
 		},
-		l: packet.V2RouterLSA{
+		Content: packet.V2RouterLSA{
 			RouterLSAV2: layers.RouterLSAV2{
 				Flags: 0,
 				Links: 1,
@@ -58,9 +58,14 @@ func (a *Area) updateLSDBWhenInterfaceAdd(i *Interface) {
 			},
 		},
 	}
-	a.lsDbRw.Lock()
-	defer a.lsDbRw.Unlock()
-	a.RouterLSAs[routerLSA.h.GetLSAIdentity()] = routerLSA
+	// marshal can fix length and chksum
+	err := routerLSA.FixLengthAndChkSum()
+	if err != nil {
+		logErr("Area %v err add routerLSA when interface %v added: %v", a.AreaId, i.c.ifi, err)
+	} else {
+		logDebug("Initial self-originated RouterLSA:\n%+v", routerLSA)
+		a.lsDbInstallNewLSA(routerLSA, false)
+	}
 }
 
 func (a *Area) lsDbInstallNewLSA(lsa packet.LSAdvertisement, isNeighborLSRxmChecked bool) {
@@ -320,23 +325,34 @@ func (a *Area) isSelfOriginatedLSA(l packet.LSAheader) bool {
 	return false
 }
 
-func (a *Area) agingLSA() (maxAged []packet.LSAIdentity) {
+type agedOutLSA struct {
+	Id               packet.LSAIdentity
+	IsSelfOriginated bool
+}
+
+func (a *Area) agingLSA() (maxAged []agedOutLSA) {
 	a.lsDbRw.Lock()
 	defer a.lsDbRw.Unlock()
 
 	for id, l := range a.RouterLSAs {
 		if l.aging() >= packet.MaxAge {
-			maxAged = append(maxAged, id)
+			maxAged = append(maxAged, agedOutLSA{
+				id, a.isSelfOriginatedLSA(l.h),
+			})
 		}
 	}
 	for id, l := range a.NetworkLSAs {
 		if l.aging() >= packet.MaxAge {
-			maxAged = append(maxAged, id)
+			maxAged = append(maxAged, agedOutLSA{
+				id, a.isSelfOriginatedLSA(l.h),
+			})
 		}
 	}
 	for id, l := range a.SummaryLSAs {
 		if l.aging() >= packet.MaxAge {
-			maxAged = append(maxAged, id)
+			maxAged = append(maxAged, agedOutLSA{
+				id, a.isSelfOriginatedLSA(l.h),
+			})
 		}
 	}
 

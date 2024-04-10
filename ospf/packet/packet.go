@@ -265,6 +265,11 @@ func (pt *LSAdvertisement) parse() error {
 	return nil
 }
 
+func (p *LSAdvertisement) FixLengthAndChkSum() error {
+	buf := make([]byte, p.Size())
+	return p.SerializeToSizedBuffer(buf)
+}
+
 func (p LSAdvertisement) Size() int {
 	if p.Length > 0 {
 		return int(p.Length)
