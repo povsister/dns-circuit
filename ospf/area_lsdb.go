@@ -132,8 +132,14 @@ func (a *Area) lsDbInstallNewLSA(lsa packet.LSAdvertisement, isNeighborLSRxmChec
 			}
 		}
 	case layers.ASExternalLSAtypeV2:
-		// TODO: deal with ASExternal LSA
-		err = fmt.Errorf("unimplemented")
+		var item packet.LSAdv[packet.V2ASExternalLSA]
+		item, err = lsa.AsV2ASExternalLSA()
+		if err == nil {
+			a.ins.lsDbSetExtLSA(lsa.GetLSAIdentity(), &LSDBASExternalItem{
+				lsaMeta: newLSAMeta(),
+				h:       item.LSAheader, l: item.Content,
+			})
+		}
 	}
 	if err != nil {
 		logErr("Area %v err install LSA: %v\n%+v", a.AreaId, err, lsa)
@@ -192,6 +198,13 @@ func (a *Area) lsDbGetLSAByIdentity(id packet.LSAIdentity, entireLSA bool) (lsaH
 			lsaHdr, meta, exist = smLSA.h, smLSA.lsaMeta, true
 			if entireLSA {
 				fullLSA.LSAheader, fullLSA.Content = smLSA.h, smLSA.l
+			}
+		}
+	case layers.ASExternalLSAtypeV2:
+		if extLSA, ok := a.ins.lsDbGetExtLSA(id); ok {
+			lsaHdr, meta, exist = extLSA.h, extLSA.lsaMeta, true
+			if entireLSA {
+				fullLSA.LSAheader, fullLSA.Content = extLSA.h, extLSA.l
 			}
 		}
 	}

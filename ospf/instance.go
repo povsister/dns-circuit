@@ -3,6 +3,7 @@ package ospf
 import (
 	"context"
 	"net"
+	"sync"
 
 	"github.com/google/gopacket/layers"
 
@@ -66,13 +67,33 @@ type Instance struct {
 	//        external to the Autonomous System.  Note that, if the router is
 	//        itself an AS boundary router, some of these AS-external-LSAs
 	//        have been self-originated.
-	ASExternalLSAs []*packet.V2ASExternalLSA
+	ASExternalLSAs map[packet.LSAIdentity]*LSDBASExternalItem
+	extRw          sync.RWMutex
 	// Derived from the link-state database.  Each entry in the routing
 	//        table is indexed by a destination, and contains the
 	//        destination's cost and a set of paths to use in forwarding
 	//        packets to the destination. A path is described by its type and
 	//        next hop.  For more information, see Section 11.
 	RoutingTable *RoutingTable
+}
+
+type LSDBASExternalItem struct {
+	*lsaMeta
+	h packet.LSAheader
+	l packet.V2ASExternalLSA
+}
+
+func (i *Instance) lsDbGetExtLSA(id packet.LSAIdentity) (*LSDBASExternalItem, bool) {
+	i.extRw.RLock()
+	defer i.extRw.RUnlock()
+	item, ok := i.ASExternalLSAs[id]
+	return item, ok
+}
+
+func (i *Instance) lsDbSetExtLSA(id packet.LSAIdentity, item *LSDBASExternalItem) {
+	i.extRw.Lock()
+	defer i.extRw.Unlock()
+	i.ASExternalLSAs[id] = item
 }
 
 func (i *Instance) start() {
