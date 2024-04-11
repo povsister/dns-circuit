@@ -340,9 +340,7 @@ func (p LSAheader) GetLSAIdentity() LSAIdentity {
 }
 
 func (p LSAheader) GetLSAck() LSAheader {
-	ret := p
-	ret.Length = uint16(ret.Size())
-	return ret
+	return p
 }
 
 func (p LSAheader) IsMoreRecentThan(toCompare LSAheader) bool {

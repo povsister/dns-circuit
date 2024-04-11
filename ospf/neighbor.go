@@ -717,6 +717,12 @@ func (n *Neighbor) getFromLSReqList(l packet.LSAIdentity) (lsaH packet.LSAheader
 }
 
 func (n *Neighbor) deleteFromLSReqList(l packet.LSAIdentity) {
+	defer func() {
+		// immediately trans neighbor state by calling ticker
+		if n.isLSReqListEmpty() {
+			n.lsReqRetransmissionTicker.DoFnNow()
+		}
+	}()
 	n.lsReqRw.Lock()
 	defer n.lsReqRw.Unlock()
 	n.LSRequest = slices.DeleteFunc(n.LSRequest, func(r packet.LSAheader) bool {
