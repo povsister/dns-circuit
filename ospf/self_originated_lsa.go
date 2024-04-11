@@ -80,7 +80,7 @@ func (a *Area) updateLSDBWhenInterfaceAdd(i *Interface) {
 	)
 	defer func() {
 		if err != nil {
-			logErr("Area %v err update routerLSA when interface %v added: %v", a.AreaId, i.c.ifi, err)
+			logErr("Area %v err update routerLSA when interface %v added: %v", a.AreaId, i.c.ifi.Name, err)
 		}
 	}()
 	if ok {
@@ -104,14 +104,14 @@ func (a *Area) updateLSDBWhenInterfaceAdd(i *Interface) {
 		if err = lsa.FixLengthAndChkSum(); err != nil {
 			return
 		}
-		logDebug("Updated self-originated RouterLSA when interface %v added:\n%+v", i.c.ifi, lsa)
+		logDebug("Updated self-originated RouterLSA when interface %v added:\n%+v", i.c.ifi.Name, lsa)
 		a.ins.floodLSA(a, i, lsa, a.ins.RouterId)
 	} else {
 		lsa, err = i.newRouterLSA()
 		if err != nil {
 			return
 		}
-		logDebug("Initial self-originated RouterLSA when interface %v added:\n%+v", i.c.ifi, lsa)
+		logDebug("Initial self-originated RouterLSA when interface %v added:\n%+v", i.c.ifi.Name, lsa)
 		a.lsDbInstallNewLSA(lsa, false)
 		a.ins.floodLSA(a, i, lsa, a.ins.RouterId)
 	}
@@ -129,7 +129,7 @@ func (a *Area) updateLSDBWhenDRorBDRChanged(i *Interface) {
 	)
 	defer func() {
 		if err != nil {
-			logErr("Area %v err update routerLSA when DR or BDR changed at interface %v: %v", a.AreaId, i.c.ifi, err)
+			logErr("Area %v err update routerLSA when DR or BDR changed at interface %v: %v", a.AreaId, i.c.ifi.Name, err)
 		}
 	}()
 	if !ok {

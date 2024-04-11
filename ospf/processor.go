@@ -50,8 +50,7 @@ func (i *Interface) doParsedMsgProcessing(h *ipv4.Header, op *packet.LayerOSPFv2
 }
 
 func (a *Area) procHello(i *Interface, h *ipv4.Header, hello *packet.OSPFv2Packet[packet.HelloPayloadV2]) {
-	logDebug("Got OSPFv%d %s(%d)\nRouterId: %v AreaId:%v\n%+v",
-		hello.Version, hello.Type, hello.PacketLength, hello.RouterID, hello.AreaID, hello.Content)
+	logDebug("Got %s", hello)
 
 	// pre-checks
 	if hello.Content.HelloInterval != i.HelloInterval || hello.Content.RouterDeadInterval != i.RouterDeadInterval ||
@@ -136,8 +135,7 @@ func (a *Area) procHello(i *Interface, h *ipv4.Header, hello *packet.OSPFv2Packe
 }
 
 func (a *Area) procDatabaseDesc(i *Interface, h *ipv4.Header, dd *packet.OSPFv2Packet[packet.DbDescPayload]) {
-	logDebug("Got OSPFv%d %s(%d)\nRouterId: %v AreaId: %v\n%+v", dd.Version, dd.Type, dd.PacketLength,
-		dd.RouterID, dd.AreaID, dd.Content)
+	logDebug("Got %s", dd)
 
 	neighborId := dd.RouterID
 	neighbor, ok := i.getNeighbor(neighborId)
@@ -328,8 +326,7 @@ func (a *Area) procDatabaseDesc(i *Interface, h *ipv4.Header, dd *packet.OSPFv2P
 }
 
 func (a *Area) procLSR(i *Interface, h *ipv4.Header, lsr *packet.OSPFv2Packet[packet.LSRequestPayload]) {
-	logDebug("Got OSPFv%d %s(%d)\nRouterId: %v AreaId: %v\n%+v", lsr.Version, lsr.Type, lsr.PacketLength,
-		lsr.RouterID, lsr.AreaID, lsr.Content)
+	logDebug("Got %s", lsr)
 
 	neighbor, ok := i.getNeighbor(lsr.RouterID)
 	if !ok {
@@ -355,8 +352,7 @@ func (a *Area) procLSR(i *Interface, h *ipv4.Header, lsr *packet.OSPFv2Packet[pa
 }
 
 func (a *Area) procLSU(i *Interface, h *ipv4.Header, lsu *packet.OSPFv2Packet[packet.LSUpdatePayload]) {
-	logDebug("Got OSPFv%d %s(%d)\nRouterId: %v AreaId: %v\n%+v", lsu.Version, lsu.Type, lsu.PacketLength,
-		lsu.RouterID, lsu.AreaID, lsu.Content)
+	logDebug("Got %s", lsu)
 
 	neighbor, ok := i.getNeighbor(lsu.RouterID)
 	if !ok {
@@ -454,18 +450,16 @@ func (a *Area) procLSU(i *Interface, h *ipv4.Header, lsu *packet.OSPFv2Packet[pa
 			// (e) Possibly acknowledge the receipt of the LSA by sending a
 			//            Link State Acknowledgment packet back out the receiving
 			//            interface.  This is explained below in Section 13.5.
-			if existInLSDB {
-				if i.currState() == InterfaceBackup {
-					// Delayed ack should be sent if this LSA is received from DR,
-					// otherwise do nothing
-					if i.DR.Load() == neighbor.NeighborId {
-						delayedAcks = append(delayedAcks, l.GetLSAck())
-					}
-				} else {
-					// in all other state.
-					// Delayed ack should be sent.
+			if i.currState() == InterfaceBackup {
+				// Delayed ack should be sent if this LSA is received from DR,
+				// otherwise do nothing
+				if i.DR.Load() == neighbor.NeighborId {
 					delayedAcks = append(delayedAcks, l.GetLSAck())
 				}
+			} else {
+				// in all other state.
+				// Delayed ack should be sent.
+				delayedAcks = append(delayedAcks, l.GetLSAck())
 			}
 
 			// (f) If this new LSA indicates that it was originated by the
@@ -598,8 +592,7 @@ func (a *Area) procLSU(i *Interface, h *ipv4.Header, lsu *packet.OSPFv2Packet[pa
 }
 
 func (a *Area) procLSAck(i *Interface, h *ipv4.Header, lsack *packet.OSPFv2Packet[packet.LSAcknowledgementPayload]) {
-	logDebug("Got OSPFv%d %s(%d)\nRouterId: %v AreaId: %v\n%+v", lsack.Version, lsack.Type, lsack.PacketLength,
-		lsack.RouterID, lsack.AreaID, lsack.Content)
+	logDebug("Got %s", lsack)
 
 	neighbor, ok := i.getNeighbor(lsack.RouterID)
 	if !ok {

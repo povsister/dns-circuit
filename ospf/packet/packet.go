@@ -26,6 +26,7 @@ type OSPFPayloadV2 interface {
 	HelloPayloadV2 | DbDescPayload |
 		LSRequestPayload | LSUpdatePayload | LSAcknowledgementPayload
 	marshalable
+	String() string
 }
 
 var (
@@ -435,6 +436,7 @@ type marshalable interface {
 type LSAContent interface {
 	isLSAContent() // make it private
 	marshalable
+	String() string
 }
 
 type rawLSA []byte
