@@ -3,7 +3,7 @@ package packet
 import (
 	"testing"
 
-	"github.com/google/gopacket/layers"
+	"github.com/gopacket/gopacket/layers"
 )
 
 func TestLSAChkSum(t *testing.T) {

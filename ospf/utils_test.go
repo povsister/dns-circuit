@@ -5,7 +5,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/google/gopacket/layers"
+	"github.com/gopacket/gopacket/layers"
 
 	"github.com/povsister/dns-circuit/ospf/packet"
 )

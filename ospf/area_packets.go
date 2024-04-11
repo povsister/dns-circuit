@@ -3,8 +3,8 @@ package ospf
 import (
 	"encoding/binary"
 
-	"github.com/google/gopacket"
-	"github.com/google/gopacket/layers"
+	"github.com/gopacket/gopacket"
+	"github.com/gopacket/gopacket/layers"
 
 	"github.com/povsister/dns-circuit/ospf/packet"
 )

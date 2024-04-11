@@ -3,12 +3,12 @@ module github.com/povsister/dns-circuit
 go 1.22
 
 require (
-	github.com/google/gopacket v1.1.20-0.20220810144506-32ee38206866
+	github.com/gopacket/gopacket v1.2.1-0.20240410202741-c4dd161ac660
 	github.com/v2fly/v2ray-core/v5 v5.7.0
-	golang.org/x/net v0.14.0
+	golang.org/x/net v0.21.0
 )
 
-replace github.com/google/gopacket v1.1.20-0.20220810144506-32ee38206866 => github.com/povsister/gopacket v0.0.0-20240410122921-c862d3d58aad
+replace github.com/gopacket/gopacket v1.2.1-0.20240410202741-c4dd161ac660 => github.com/povsister/gopacket v0.0.0-20240411023526-b3b06fd33480
 
 require (
 	github.com/adrg/xdg v0.4.0 // indirect
@@ -62,11 +62,11 @@ require (
 	github.com/xtaci/smux v1.5.15 // indirect
 	go.starlark.net v0.0.0-20220817180228-f738f5508c12 // indirect
 	go4.org/netipx v0.0.0-20220812043211-3cc044ffd68d // indirect
-	golang.org/x/crypto v0.12.0 // indirect
+	golang.org/x/crypto v0.19.0 // indirect
 	golang.org/x/exp v0.0.0-20221205204356-47842c84f3db // indirect
 	golang.org/x/mod v0.8.0 // indirect
-	golang.org/x/sys v0.11.0 // indirect
-	golang.org/x/text v0.12.0 // indirect
+	golang.org/x/sys v0.17.0 // indirect
+	golang.org/x/text v0.14.0 // indirect
 	golang.org/x/tools v0.6.0 // indirect
 	google.golang.org/genproto v0.0.0-20230110181048-76db0878b65f // indirect
 	google.golang.org/grpc v1.53.0 // indirect

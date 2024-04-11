@@ -3,7 +3,7 @@ package packet
 import (
 	"encoding/binary"
 
-	"github.com/google/gopacket/layers"
+	"github.com/gopacket/gopacket/layers"
 )
 
 // LSAIdentity The LS type, Link State ID, and Advertising Router fields
