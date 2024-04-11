@@ -144,7 +144,7 @@ func (i *Instance) shutdown() {
 	i.Backbone.shutdown()
 }
 
-func (i *Instance) floodLSA(fromArea *Area, fromIfi *Interface, l packet.LSAdvertisement, lsu *packet.OSPFv2Packet[packet.LSUpdatePayload]) {
+func (i *Instance) floodLSA(fromArea *Area, fromIfi *Interface, l packet.LSAdvertisement, fromRtId uint32) {
 	// Depending upon the LSA's LS type, the LSA can be flooded out
 	//        only certain interfaces.  These interfaces, defined by the
 	//        following, are called the eligible interfaces:
@@ -213,15 +213,18 @@ func (i *Instance) floodLSA(fromArea *Area, fromIfi *Interface, l packet.LSAdver
 			if nbSt == NeighborExchange || nbSt == NeighborLoading {
 				if lsr, ok := nb.getFromLSReqList(l.GetLSAIdentity()); ok {
 					if lsr.IsMoreRecentThan(l.LSAheader) {
+						logDebug("LSA in LSReqList in newer, still need this req")
 						//If the new LSA is less recent, then examine the next neighbor.
 						return true
 					} else if l.IsSame(lsr) {
+						logDebug("LSA in LSReqList is same, this is what we requested. Delete req from list.")
 						// If the two copies are the same instance, then delete
 						//                    the LSA from the Link state request list, and
 						//                    examine the next neighbor.
 						nb.deleteFromLSReqList(l.GetLSAIdentity())
 						return true
 					} else {
+						logDebug("LSA in LSReqList is older. Delete req from list.")
 						// Else, the new LSA is more recent.  Delete the LSA
 						//                    from the Link state request list.
 						nb.deleteFromLSReqList(l.GetLSAIdentity())
@@ -229,7 +232,7 @@ func (i *Instance) floodLSA(fromArea *Area, fromIfi *Interface, l packet.LSAdver
 				}
 			}
 			// If the new LSA was received from this neighbor, examine the next neighbor.
-			if lsu.RouterID == nb.NeighborId {
+			if fromRtId == nb.NeighborId {
 				return true
 			}
 			// At this point we are not positive that the neighbor has
@@ -257,7 +260,7 @@ func (i *Instance) floodLSA(fromArea *Area, fromIfi *Interface, l packet.LSAdver
 		//            Designated Router, chances are that all the neighbors have
 		//            received the LSA already.  Therefore, examine the next
 		//            interface.
-		if fromIfi == ifi && lsu.RouterID == ifi.DR.Load() || lsu.RouterID == ifi.BDR.Load() {
+		if fromIfi == ifi && fromRtId == ifi.DR.Load() || fromRtId == ifi.BDR.Load() {
 			continue
 		}
 

@@ -80,7 +80,8 @@ func (p DbDescPayload) SerializeToSizedBuffer(b []byte) (err error) {
 		if err = lsaH.SerializeToSizedBuffer(thisB); err != nil {
 			return
 		}
-		lsaH.recalculateChecksum(thisB)
+		// Don't force recalculate chksum since it is mostly directly retrieved from LSDB
+		lsaH.recalculateChecksum(thisB, false)
 		p.LSAinfo[idx] = lsaH
 	}
 	return
@@ -192,7 +193,8 @@ func (p LSAcknowledgementPayload) SerializeToSizedBuffer(b []byte) (err error) {
 		if err = h.SerializeToSizedBuffer(thisB); err != nil {
 			return
 		}
-		h.recalculateChecksum(thisB)
+		// Don't force recalculate chksum since it is mostly directly retrieved from LSUpdate
+		h.recalculateChecksum(thisB, false)
 		offset += h.Size()
 		p[i] = h
 	}
@@ -282,33 +284,48 @@ func (p *LSAdvertisement) SerializeToSizedBuffer(b []byte) (err error) {
 		return ErrBufferLengthTooShort
 	}
 
-	// fix length
-	if p.LSAheader.Length <= 0 {
-		p.LSAheader.Length = uint16(p.LSAheader.Size() + p.Content.Size())
-	}
+	// always fix length
+	p.LSAheader.Length = uint16(p.LSAheader.Size() + p.Content.Size())
 	if err = p.LSAheader.SerializeToSizedBuffer(b[0:p.LSAheader.Size()]); err != nil {
 		return
 	}
 	if err = p.Content.SerializeToSizedBuffer(b[p.LSAheader.Size() : p.LSAheader.Size()+p.Content.Size()]); err != nil {
 		return
 	}
-	// fix chksum
-	if p.LSChecksum <= 0 {
-		p.LSAheader.recalculateChecksum(b)
-	}
+	// always fix chksum
+	p.LSAheader.recalculateChecksum(b, true)
 	return
 }
 
 // Fletcher-16 checksum
-func lsaChecksum(b []byte) uint16 {
+// refers https://github.com/vyos-legacy/vyatta-quagga/blob/current/lib/checksum.c#L55
+func lsaChecksum(b []byte, offset int32) uint16 {
 	var (
-		sum1, sum2 uint16 = 0, 0
+		c0, c1 int32 = 0, 0
 	)
-	for i := 0; i < len(b); i++ {
-		sum1 = (sum1 + uint16(b[i])) % 255
-		sum2 = (sum2 + sum1) % 255
+	const (
+		modX = 4102
+	)
+	left := len(b)
+	for left != 0 {
+		partial := min(left, modX)
+		for i := 0; i < partial; i++ {
+			c0 = c0 + int32(b[i])
+			c1 += c0
+		}
+		c0 = c0 % 255
+		c1 = c1 % 255
+		left -= partial
 	}
-	return (sum2 << 8) | sum1
+	x := ((int32(len(b))-offset-1)*c0 - c1) % 255
+	if x <= 0 {
+		x += 255
+	}
+	y := 510 - c0 - x
+	if y > 255 {
+		y -= 255
+	}
+	return uint16(x<<8) | uint16(y&0xff)
 }
 
 type LSAheader layers.LSAheader
@@ -328,15 +345,15 @@ func (p LSAheader) GetLSAck() LSAheader {
 }
 
 func (p LSAheader) IsMoreRecentThan(toCompare LSAheader) bool {
-	// The LSA having the newer LS sequence number is more recent.
-	if int32(p.LSSeqNumber) > int32(toCompare.LSSeqNumber) {
-		return true
+	if p.LSSeqNumber != toCompare.LSSeqNumber {
+		// The LSA having the newer LS sequence number is more recent.
+		return int32(p.LSSeqNumber) > int32(toCompare.LSSeqNumber)
 	}
 	// If the two instances have different LS checksums, then the
 	// instance having the larger LS checksum (when considered as a
 	// 16-bit unsigned integer) is considered more recent.
-	if p.LSChecksum > toCompare.LSChecksum {
-		return true
+	if p.LSChecksum != toCompare.LSChecksum {
+		return p.LSChecksum > toCompare.LSChecksum
 	}
 	// if only one of the instances has its LS age field set
 	// to MaxAge, the instance of age MaxAge is considered to be more recent.
@@ -346,7 +363,7 @@ func (p LSAheader) IsMoreRecentThan(toCompare LSAheader) bool {
 	// if the LS age fields of the two instances differ by
 	// more than MaxAgeDiff, the instance having the smaller (younger)
 	// LS age is considered to be more recent.
-	if (int32(p.LSAge)-int32(toCompare.LSAge))&math.MaxInt32 > MaxAgeDiff &&
+	if int32(math.Abs(float64(int32(p.LSAge)-int32(toCompare.LSAge)))) > MaxAgeDiff &&
 		p.LSAge < toCompare.LSAge {
 		return true
 	}
@@ -377,22 +394,22 @@ func (p LSAheader) Ager(t uint16) uint16 {
 	return p.LSAge + 1
 }
 
-func (p *LSAheader) recalculateChecksum(b []byte) {
-	// clear LS age before calculation
-	clear(b[0:2])
-	// clear chksum bytes
-	clear(b[16:18])
+func (p *LSAheader) recalculateChecksum(b []byte, forceRecalculation bool) {
 	// fix length if it is not set
 	if p.Length <= 0 {
 		p.Length = uint16(p.Size())
+		binary.BigEndian.PutUint16(b[18:20], p.Length)
 	}
-	binary.BigEndian.PutUint16(b[18:20], p.Length)
-	// save calculated chksum
-	p.LSChecksum = lsaChecksum(b)
-	binary.BigEndian.PutUint16(b[16:18], p.LSChecksum)
-	// add back LS age
-	binary.BigEndian.PutUint16(b[0:2], p.LSAge)
-
+	if p.LSChecksum <= 0 || forceRecalculation {
+		// clear chksum bytes
+		clear(b[16:18])
+		// The Fletcher checksum of the complete contents of the LSA,
+		// including the LSA header but excluding the LS age field.
+		// So the offset of checksum should be 14 not 16.
+		p.LSChecksum = lsaChecksum(b[2:], 14)
+		//binary.BigEndian.PutUint16(b[18:20], p.Length)
+		binary.BigEndian.PutUint16(b[16:18], p.LSChecksum)
+	}
 }
 
 func (p LSAheader) SerializeToSizedBuffer(b []byte) error {

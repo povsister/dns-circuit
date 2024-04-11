@@ -344,6 +344,15 @@ func (i *Interface) shouldHaveDR() bool {
 	return i.Type == IfTypeBroadcast || i.Type == IfTypeNBMA
 }
 
+func (i *Interface) changeDRAndBDR(dr, bdr uint32) (changed bool) {
+	oldDR := i.DR.Load()
+	oldBDR := i.BDR.Load()
+	if dr == oldDR && bdr == oldBDR {
+		return false
+	}
+	return i.DR.CompareAndSwap(oldDR, dr) || i.BDR.CompareAndSwap(oldBDR, bdr)
+}
+
 func (i *Interface) currState() InterfaceState {
 	return i.State
 }

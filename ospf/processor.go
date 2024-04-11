@@ -81,8 +81,9 @@ func (a *Area) procHello(i *Interface, h *ipv4.Header, hello *packet.OSPFv2Packe
 		if isMySelfSeen {
 			// for the reason that rt priority is always 0.
 			// just some handy addon
-			i.DR.Store(neighbor.NeighborsDR)
-			i.BDR.Store(neighbor.NeighborsBDR)
+			if i.changeDRAndBDR(neighbor.NeighborsDR, neighbor.NeighborsBDR) {
+				a.updateLSDBWhenDRorBDRChanged(i)
+			}
 			// If the router itself appears in this list, the
 			// neighbor state machine should be executed with the event 2-WayReceived.
 			neighbor.consumeEvent(NbEv2WayReceived)
@@ -448,21 +449,23 @@ func (a *Area) procLSU(i *Interface, h *ipv4.Header, lsu *packet.OSPFv2Packet[pa
 			//            occurrence should be noted for later use by the
 			//            acknowledgment process (Section 13.5).
 			// 调整一下顺序，因为目前flooding依赖从LSDB读取LSA，所以先install LSA
-			a.ins.floodLSA(a, i, l, lsu)
+			a.ins.floodLSA(a, i, l, lsu.RouterID)
 
 			// (e) Possibly acknowledge the receipt of the LSA by sending a
 			//            Link State Acknowledgment packet back out the receiving
 			//            interface.  This is explained below in Section 13.5.
-			if i.currState() == InterfaceBackup {
-				// Delayed ack should be sent if this LSA is received from DR,
-				// otherwise do nothing
-				if i.DR.Load() == neighbor.NeighborId {
+			if existInLSDB {
+				if i.currState() == InterfaceBackup {
+					// Delayed ack should be sent if this LSA is received from DR,
+					// otherwise do nothing
+					if i.DR.Load() == neighbor.NeighborId {
+						delayedAcks = append(delayedAcks, l.GetLSAck())
+					}
+				} else {
+					// in all other state.
+					// Delayed ack should be sent.
 					delayedAcks = append(delayedAcks, l.GetLSAck())
 				}
-			} else {
-				// in all other state.
-				// Delayed ack should be sent.
-				delayedAcks = append(delayedAcks, l.GetLSAck())
 			}
 
 			// (f) If this new LSA indicates that it was originated by the

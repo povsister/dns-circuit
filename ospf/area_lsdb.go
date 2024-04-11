@@ -9,65 +9,6 @@ import (
 	"github.com/povsister/dns-circuit/ospf/packet"
 )
 
-func (a *Area) updateLSDBWhenInterfaceAdd(i *Interface) {
-	routerLSA := packet.LSAdvertisement{
-		LSAheader: packet.LSAheader{
-			LSType: layers.RouterLSAtypeV2,
-			// LS Type   Link State ID
-			// _______________________________________________
-			// 1         The originating router's Router ID.
-			// 2         The IP interface address of the network's Designated Router.
-			// 3         The destination network's IP address.
-			// 4         The Router ID of the described AS boundary router.
-			// 5         The destination network's IP address.
-			LinkStateID: a.ins.RouterId,
-			AdvRouter:   a.ins.RouterId,
-			LSSeqNumber: packet.InitialSequenceNumber,
-			LSOptions:   uint8(packet.BitOption(0).SetBit(packet.CapabilityEbit)),
-		},
-		Content: packet.V2RouterLSA{
-			RouterLSAV2: layers.RouterLSAV2{
-				Flags: 0,
-				Links: 1,
-			},
-			Routers: []packet.RouterV2{
-				{
-					RouterV2: layers.RouterV2{
-						// Type   Description
-						// __________________________________________________
-						// 1      Point-to-point connection to another router
-						// 2      Connection to a transit network
-						// 3      Connection to a stub network
-						// 4      Virtual link
-						Type: 2,
-						// Type   Link ID
-						// ______________________________________
-						// 1      Neighboring router's Router ID
-						// 2      IP address of Designated Router
-						// 3      IP network/subnet number
-						// 4      Neighboring router's Router ID
-						LinkID: i.DR.Load(), // TODO: fix DR change event
-						//连接数据，其值取决于连接的类型：
-						//unnumbered P2P：接口的索引值。
-						//Stub网络：子网掩码。
-						//其他连接：设备接口的IP地址。
-						LinkData: ipv4BytesToUint32(i.Address.IP.To4()),
-						Metric:   20,
-					},
-				},
-			},
-		},
-	}
-	// marshal can fix length and chksum
-	err := routerLSA.FixLengthAndChkSum()
-	if err != nil {
-		logErr("Area %v err add routerLSA when interface %v added: %v", a.AreaId, i.c.ifi, err)
-	} else {
-		logDebug("Initial self-originated RouterLSA:\n%+v", routerLSA)
-		a.lsDbInstallNewLSA(routerLSA, false)
-	}
-}
-
 func (a *Area) lsDbInstallNewLSA(lsa packet.LSAdvertisement, isNeighborLSRxmChecked bool) {
 	// Installing a new LSA in the database, either as the result of
 	//        flooding or a newly self-originated LSA, may cause the OSPF

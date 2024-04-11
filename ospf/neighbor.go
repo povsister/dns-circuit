@@ -391,6 +391,9 @@ func (n *Neighbor) consumeEvent(e NeighborStateChangingEvent) {
 		}
 	case NbEvSeqNumberMismatch:
 		if n.currState() >= NeighborExchange {
+			n.clearLSRetransmissionList()
+			n.clearLSReqList()
+			clear(n.DatabaseSummary)
 			n.transState(NeighborExStart)
 			// The (possibly partially formed) adjacency is torn
 			//                    down, and then an attempt is made at
@@ -405,13 +408,13 @@ func (n *Neighbor) consumeEvent(e NeighborStateChangingEvent) {
 			//                    initialize (I), more (M) and master (MS) bits set.
 			//                    This Database Description Packet should be otherwise
 			//                    empty (see Section 10.8).
-			n.clearLSRetransmissionList()
-			n.clearLSReqList()
-			clear(n.DatabaseSummary)
 			n.startMasterNegotiation()
 		}
 	case NbEvBadLSReq:
 		if n.currState() >= NeighborExchange {
+			n.clearLSRetransmissionList()
+			n.clearLSReqList()
+			clear(n.DatabaseSummary)
 			n.transState(NeighborExStart)
 			// The action for event BadLSReq is exactly the same as
 			//                    for the neighbor event SeqNumberMismatch.  The
@@ -420,18 +423,28 @@ func (n *Neighbor) consumeEvent(e NeighborStateChangingEvent) {
 			//                    more information, see the neighbor state machine
 			//                    entry that is invoked when event SeqNumberMismatch
 			//                    is generated in state Exchange or greater.
+			n.startMasterNegotiation()
 		}
 	case NbEvKillNbr:
+		n.clearLSRetransmissionList()
+		n.clearLSReqList()
+		clear(n.DatabaseSummary)
 		n.transState(NeighborDown)
 		// The Link state retransmission list, Database summary
 		//                    list and Link state request list are cleared of
 		//                    LSAs.  Also, the Inactivity Timer is disabled.
 	case NbEvLLDown:
+		n.clearLSRetransmissionList()
+		n.clearLSReqList()
+		clear(n.DatabaseSummary)
 		n.transState(NeighborDown)
 		// The Link state retransmission list, Database summary
 		//                    list and Link state request list are cleared of
 		//                    LSAs.  Also, the Inactivity Timer is disabled.
 	case NbEvInactivityTimer:
+		n.clearLSRetransmissionList()
+		n.clearLSReqList()
+		clear(n.DatabaseSummary)
 		n.transState(NeighborDown)
 		n.i.removeNeighbor(n)
 		// The Link state retransmission list, Database summary
@@ -439,6 +452,9 @@ func (n *Neighbor) consumeEvent(e NeighborStateChangingEvent) {
 		//                    LSAs.
 	case NbEv1Way:
 		if n.currState() >= Neighbor2Way {
+			n.clearLSRetransmissionList()
+			n.clearLSReqList()
+			clear(n.DatabaseSummary)
 			n.transState(NeighborInit)
 			// The Link state retransmission list, Database summary
 			//                    list and Link state request list are cleared of
@@ -726,6 +742,7 @@ func (n *Neighbor) startLSR() {
 		if n.sendOutTopLSR() <= 0 {
 			// no LSR has been sent. means that the list is empty.
 			n.lsReqRetransmissionTicker.Stop()
+			n.consumeEvent(NbEvLoadingDone)
 		}
 	})
 }
