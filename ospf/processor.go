@@ -50,7 +50,7 @@ func (i *Interface) doParsedMsgProcessing(h *ipv4.Header, op *packet.LayerOSPFv2
 }
 
 func (a *Area) procHello(i *Interface, h *ipv4.Header, hello *packet.OSPFv2Packet[packet.HelloPayloadV2]) {
-	logDebug("Got %s", hello)
+	//logDebug("Got %s", hello)
 
 	// pre-checks
 	if hello.Content.HelloInterval != i.HelloInterval || hello.Content.RouterDeadInterval != i.RouterDeadInterval ||

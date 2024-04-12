@@ -503,9 +503,9 @@ func (i *Interface) runReadLoop() {
 					continue
 				}
 				payloadLen := n - ipv4.HeaderLen
-				if h != nil {
-					logDebug("Received via Interface %s %s->%s payloadSize(%d)", i.c.ifi.Name, h.Src.String(), h.Dst.String(), payloadLen)
-				}
+				//if h != nil {
+				//	logDebug("Received via Interface %s %s->%s payloadSize(%d)", i.c.ifi.Name, h.Src.String(), h.Dst.String(), payloadLen)
+				//}
 				payload := make([]byte, payloadLen)
 				copy(payload, buf[ipv4.HeaderLen:n])
 				select {
@@ -560,9 +560,11 @@ func (i *Interface) doSendPkt(pkt sendPkt) (err error) {
 			i.Address.IP.String(), dstIP.String(),
 			pkt.p.GetType(), err)
 	} else {
-		logDebug("Sent via Interface %s %s->%s %v Packet(%d): \n%+v", i.c.ifi.Name,
-			i.Address.IP.String(), dstIP.String(),
-			pkt.p.GetType(), len(p.Bytes()), pkt.p)
+		if pkt.p.GetType() != layers.OSPFHello {
+			logDebug("Sent via Interface %s %s->%s %v Packet(%d): \n%+v", i.c.ifi.Name,
+				i.Address.IP.String(), dstIP.String(),
+				pkt.p.GetType(), len(p.Bytes()), pkt.p)
+		}
 	}
 	return
 }
