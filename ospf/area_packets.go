@@ -85,10 +85,10 @@ func (i *Interface) doHello() (err error) {
 			i.Address.IP.String(), AllSPFRouters,
 			err)
 	} else {
-		logDebug("Sent interval Hello Packet(%d) %s->%s via Interface %s:\n%+v", len(p.Bytes()),
-			i.Address.IP.String(), AllSPFRouters,
-			i.c.ifi.Name,
-			hello)
+		//logDebug("Sent interval Hello Packet(%d) %s->%s via Interface %s:\n%+v", len(p.Bytes()),
+		//	i.Address.IP.String(), AllSPFRouters,
+		//	i.c.ifi.Name,
+		//	hello)
 	}
 	return err
 }
