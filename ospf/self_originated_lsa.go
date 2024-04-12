@@ -1,14 +1,12 @@
 package ospf
 
 import (
-	"fmt"
-
 	"github.com/gopacket/gopacket/layers"
 
 	"github.com/povsister/dns-circuit/ospf/packet"
 )
 
-func (i *Interface) newRouterLSA() (packet.LSAdvertisement, error) {
+func (i *Interface) newRouterLSA() packet.LSAdvertisement {
 	routerLSA := packet.LSAdvertisement{
 		LSAheader: packet.LSAheader{
 			LSType: layers.RouterLSAtypeV2,
@@ -63,34 +61,50 @@ func (i *Interface) newRouterLSA() (packet.LSAdvertisement, error) {
 			},
 		},
 	}
-	// marshal can fix length and chksum
-	err := routerLSA.FixLengthAndChkSum()
-	return routerLSA, err
+	return routerLSA
+}
+
+func (a *Area) tryUpdatingExistingLSA(id packet.LSAIdentity, i *Interface, modFn func(lsa *packet.LSAdvertisement)) (exist bool) {
+	_, lsa, _, ok := a.lsDbGetLSAByIdentity(id, true)
+	if ok {
+		modFn(&lsa)
+		if err := lsa.FixLengthAndChkSum(); err != nil {
+			logErr("Area %v err fix LSA chkSum while updating with interface %v: %v\n%v", a.AreaId, i.c.ifi.Name, err, lsa)
+			return true
+		}
+		a.lsDbInstallNewLSA(lsa, false)
+		logDebug("Area %v successfully updated LSA with interface %v:\n%v", a.AreaId, i.c.ifi.Name, lsa)
+		a.ins.floodLSA(a, i, lsa, a.ins.RouterId)
+		return true
+	}
+	return false
+}
+
+func (a *Area) originatingNewLSA(i *Interface, lsa packet.LSAdvertisement) {
+	if err := lsa.FixLengthAndChkSum(); err != nil {
+		logErr("Area %v err fix LSA chkSum while originating with interface %v: %v\n%v", a.AreaId, i.c.ifi.Name, err, lsa)
+		return
+	}
+	a.lsDbInstallNewLSA(lsa, true)
+	logDebug("Area %v successfully originated new LSA with interface %v:\n%v", a.AreaId, i.c.ifi.Name, lsa)
+	a.ins.floodLSA(a, i, lsa, a.ins.RouterId)
 }
 
 func (a *Area) updateLSDBWhenInterfaceAdd(i *Interface) {
 	// need update RouterLSA when interface updated.
-	_, lsa, _, ok := a.lsDbGetLSAByIdentity(packet.LSAIdentity{
+	logDebug("Updating self-originated RouterLSA with newly added interface %v", i.c.ifi.Name)
+	if !a.tryUpdatingExistingLSA(packet.LSAIdentity{
 		LSType:      layers.RouterLSAtypeV2,
 		LinkStateId: a.ins.RouterId,
 		AdvRouter:   a.ins.RouterId,
-	}, true)
-	var (
-		err error
-	)
-	defer func() {
+	}, i, func(lsa *packet.LSAdvertisement) {
+		// update existing LSA
+		rtLSA, err := lsa.AsV2RouterLSA()
 		if err != nil {
-			logErr("Area %v err update routerLSA when interface %v added: %v", a.AreaId, i.c.ifi.Name, err)
-		}
-	}()
-	if ok {
-		var rtLSA packet.LSAdv[packet.V2RouterLSA]
-		rtLSA, err = lsa.AsV2RouterLSA()
-		if err != nil {
+			logErr("Area %v err AsV2RouterLSA with interface %v when new ifi added: %v", a.AreaId, i.c.ifi.Name, err)
 			return
 		}
-		lsa.LSSeqNumber = uint32(int32(lsa.LSSeqNumber) + 1) // TODO: deal with maxSeqNum
-		lsa.LSAge = 0
+		lsa.PrepareReOriginating() // update LSA header for re-originating
 		rtLSA.Content.Routers = append(rtLSA.Content.Routers, packet.RouterV2{
 			RouterV2: layers.RouterV2{
 				Type:     2,
@@ -101,58 +115,34 @@ func (a *Area) updateLSDBWhenInterfaceAdd(i *Interface) {
 		})
 		rtLSA.Content.Links = uint16(len(rtLSA.Content.Routers))
 		lsa.Content = rtLSA.Content
-		if err = lsa.FixLengthAndChkSum(); err != nil {
-			return
-		}
-		logDebug("Updated self-originated RouterLSA when interface %v added:\n%+v", i.c.ifi.Name, lsa)
-		a.ins.floodLSA(a, i, lsa, a.ins.RouterId)
-	} else {
-		lsa, err = i.newRouterLSA()
-		if err != nil {
-			return
-		}
-		logDebug("Initial self-originated RouterLSA when interface %v added:\n%+v", i.c.ifi.Name, lsa)
-		a.lsDbInstallNewLSA(lsa, false)
-		a.ins.floodLSA(a, i, lsa, a.ins.RouterId)
+	}) {
+		// LSA not found. originating a new one.
+		a.originatingNewLSA(i, i.newRouterLSA())
 	}
 }
 
 func (a *Area) updateLSDBWhenDRorBDRChanged(i *Interface) {
 	// need update RouterLSA when DR updated.
-	_, lsa, _, ok := a.lsDbGetLSAByIdentity(packet.LSAIdentity{
+	logDebug("Updating self-originated RouterLSA with new DR/BDR")
+	if !a.tryUpdatingExistingLSA(packet.LSAIdentity{
 		LSType:      layers.RouterLSAtypeV2,
 		LinkStateId: a.ins.RouterId,
 		AdvRouter:   a.ins.RouterId,
-	}, true)
-	var (
-		err error
-	)
-	defer func() {
+	}, i, func(lsa *packet.LSAdvertisement) {
+		rtLSA, err := lsa.AsV2RouterLSA()
 		if err != nil {
-			logErr("Area %v err update routerLSA when DR or BDR changed at interface %v: %v", a.AreaId, i.c.ifi.Name, err)
+			logErr("Area %v err AsV2RouterLSA with interface %v when DR/BDR change: %v", a.AreaId, i.c.ifi.Name, err)
+			return
 		}
-	}()
-	if !ok {
-		err = fmt.Errorf("unexpected no existing routerLSA found")
-		return
+		lsa.PrepareReOriginating()
+		for idx := 0; idx < len(rtLSA.Content.Routers); idx++ {
+			rt := rtLSA.Content.Routers[idx]
+			rt.LinkID = i.DR.Load()
+			rtLSA.Content.Routers[idx] = rt
+		}
+		lsa.Content = rtLSA.Content
+	}) {
+		logErr("Area %v err update RouterLSA while DR/BDR changed with interface %v: unexpected no existing routerLSA found",
+			a.AreaId, i.c.ifi.Name)
 	}
-	var rtLSA packet.LSAdv[packet.V2RouterLSA]
-	rtLSA, err = lsa.AsV2RouterLSA()
-	if err != nil {
-		return
-	}
-	lsa.LSSeqNumber = uint32(int32(lsa.LSSeqNumber) + 1) // TODO: deal with maxSeqNum
-	lsa.LSAge = 0
-	for idx := 0; idx < len(rtLSA.Content.Routers); idx++ {
-		rt := rtLSA.Content.Routers[idx]
-		rt.LinkID = i.DR.Load()
-		rtLSA.Content.Routers[idx] = rt
-	}
-	lsa.Content = rtLSA.Content
-	if err = lsa.FixLengthAndChkSum(); err != nil {
-		return
-	}
-	logDebug("Updated self-originated RouterLSA when DR/BDR changed:\n%+v", lsa)
-	a.lsDbInstallNewLSA(lsa, false)
-	a.ins.floodLSA(a, i, lsa, a.ins.RouterId)
 }

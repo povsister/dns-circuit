@@ -386,11 +386,22 @@ func (p LSAheader) Size() int {
 	return 20
 }
 
-func (p LSAheader) Ager(t uint16) uint16 {
+func (p *LSAheader) Ager(t uint16) uint16 {
 	if p.LSAge+t > MaxAge {
-		return p.LSAge
+		p.LSAge = MaxAge
+		return MaxAge // MaxAge will be processed while LSDB aging
 	}
-	return p.LSAge + 1
+	p.LSAge += t
+	return p.LSAge
+}
+
+func (p *LSAheader) PrepareReOriginating() {
+	p.LSAge = 0
+	if int32(p.LSSeqNumber) < MaxSequenceNumber {
+		p.LSSeqNumber = uint32(int32(p.LSSeqNumber) + 1)
+		return
+	}
+	p.LSSeqNumber = MaxSequenceNumber // MaxSeqNum will be processed while LSDB aging
 }
 
 func (p *LSAheader) recalculateChecksum(b []byte, forceRecalculation bool) {

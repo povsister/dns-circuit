@@ -840,7 +840,7 @@ func (n *Neighbor) doLSRetransmission() {
 		if !ok {
 			continue
 		}
-		lsa.LSAge = lsa.Ager(n.i.InfTransDelay)
+		lsa.Ager(n.i.InfTransDelay)
 		p := &packet.OSPFv2Packet[packet.LSUpdatePayload]{
 			OSPFv2: n.i.Area.ospfPktHeader(func(p *packet.LayerOSPFv2) {
 				p.Type = layers.OSPFLinkStateUpdate
