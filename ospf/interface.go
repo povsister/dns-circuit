@@ -651,6 +651,7 @@ func (i *Interface) sendLSUFlood(l packet.LSAIdentity, dst uint32) {
 		return
 	}
 	defer meta.updateLastFloodTime()
+	lsa.Ager(i.InfTransDelay)
 	p := &packet.OSPFv2Packet[packet.LSUpdatePayload]{
 		OSPFv2: i.Area.ospfPktHeader(func(p *packet.LayerOSPFv2) {
 			p.Type = layers.OSPFLinkStateUpdate
