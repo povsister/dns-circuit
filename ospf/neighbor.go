@@ -190,6 +190,19 @@ type Neighbor struct {
 	lsReqRetransmissionTicker *TickerFunc
 }
 
+func (n *Neighbor) clearAllGoroutine() {
+	n.lsRetransmissionTicker.Stop()
+	n.lsReqRetransmissionTicker.Stop()
+	n.negotiationRetransmissionTicker.Stop()
+	n.ddRetransmissionTicker.Stop()
+	if n.lastReceivedDDInvalidTimer != nil {
+		n.lastReceivedDDInvalidTimer.Stop()
+	}
+	if n.InactivityTimer != nil {
+		n.InactivityTimer.Stop()
+	}
+}
+
 func (n *Neighbor) currState() NeighborState {
 	n.stMu.RLock()
 	defer n.stMu.RUnlock()
@@ -579,7 +592,6 @@ func (n *Neighbor) sendDDExchange() {
 		return
 	}
 	// im master
-	n.ddRetransmissionTicker.Stop()
 	// only master can incr the ddSeqNum
 	ddSeqNum := n.DDSeqNumber.Load()
 	ddSeqNum += 1
@@ -627,6 +639,7 @@ func (n *Neighbor) sendDDExchange() {
 	//    by echoing the DD sequence number or
 	// b) RxmtInterval seconds elapse without an acknowledgment, in which case the previous
 	//    Database Description packet is retransmitted.
+	n.ddRetransmissionTicker.Stop()
 	n.ddRetransmissionTicker = TimeTickerFunc(n.i.ctx, time.Duration(n.i.RxmtInterval)*time.Second,
 		func() { n.i.queuePktForSend(pkt) })
 }
@@ -776,6 +789,7 @@ func (n *Neighbor) sendOutTopLSR() int {
 func (n *Neighbor) clearLSRetransmissionList() {
 	n.lsRetransRw.Lock()
 	defer n.lsRetransRw.Unlock()
+	n.lsRetransmissionTicker.Suspend()
 	clear(n.LSRetransmission)
 }
 
@@ -783,6 +797,11 @@ func (n *Neighbor) tryEmptyLSRetransmissionListByAck(lsAcks *packet.OSPFv2Packet
 	suspiciousAcks []packet.LSAheader) {
 	n.lsRetransRw.Lock()
 	defer n.lsRetransRw.Unlock()
+	defer func() {
+		if len(n.LSRetransmission) <= 0 {
+			n.lsRetransmissionTicker.Suspend()
+		}
+	}()
 
 	validAcks := make([]packet.LSAIdentity, 0, len(lsAcks.Content))
 	validAckLUT := make(map[packet.LSAIdentity]int, len(lsAcks.Content))
@@ -828,8 +847,8 @@ func (n *Neighbor) addToLSRetransmissionList(l packet.LSAIdentity) {
 		n.lsRetransmissionTicker = TimeTickerFunc(n.i.ctx, time.Duration(n.i.RxmtInterval)*time.Second,
 			n.doLSRetransmission, true)
 	}
-	//n.lsRetransmissionTicker.Reset()
 	n.LSRetransmission[l] = struct{}{}
+	n.lsRetransmissionTicker.Reset()
 }
 
 func (n *Neighbor) doLSRetransmission() {

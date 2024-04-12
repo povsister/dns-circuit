@@ -9,6 +9,60 @@ import (
 	"github.com/povsister/dns-circuit/ospf/packet"
 )
 
+func (a *Area) lsDbInstallLSA(lsa packet.LSAdvertisement, meta *lsaMeta) error {
+	var err error
+	a.lsDbRw.Lock()
+	defer a.lsDbRw.Unlock()
+	switch lsa.LSType {
+	case layers.RouterLSAtypeV2:
+		var item packet.LSAdv[packet.V2RouterLSA]
+		item, err = lsa.AsV2RouterLSA()
+		if err == nil {
+			a.RouterLSAs[lsa.GetLSAIdentity()] = &LSDBRouterItem{
+				lsaMeta: meta,
+				h:       item.LSAheader, l: item.Content,
+			}
+		}
+	case layers.NetworkLSAtypeV2:
+		var item packet.LSAdv[packet.V2NetworkLSA]
+		item, err = lsa.AsV2NetworkLSA()
+		if err == nil {
+			a.NetworkLSAs[lsa.GetLSAIdentity()] = &LSDBNetworkItem{
+				lsaMeta: meta,
+				h:       item.LSAheader, l: item.Content,
+			}
+		}
+	case layers.SummaryLSANetworktypeV2:
+		var item packet.LSAdv[packet.V2SummaryLSAType3]
+		item, err = lsa.AsV2SummaryLSAType3()
+		if err == nil {
+			a.SummaryLSAs[lsa.GetLSAIdentity()] = &LSDBSummaryItem{
+				lsaMeta: meta,
+				h:       item.LSAheader, l: item.Content.V2SummaryLSAImpl,
+			}
+		}
+	case layers.SummaryLSAASBRtypeV2:
+		var item packet.LSAdv[packet.V2SummaryLSAType4]
+		item, err = lsa.AsV2SummaryLSAType4()
+		if err == nil {
+			a.SummaryLSAs[lsa.GetLSAIdentity()] = &LSDBSummaryItem{
+				lsaMeta: meta,
+				h:       item.LSAheader, l: item.Content.V2SummaryLSAImpl,
+			}
+		}
+	case layers.ASExternalLSAtypeV2:
+		var item packet.LSAdv[packet.V2ASExternalLSA]
+		item, err = lsa.AsV2ASExternalLSA()
+		if err == nil {
+			a.ins.lsDbSetExtLSA(lsa.GetLSAIdentity(), &LSDBASExternalItem{
+				lsaMeta: meta,
+				h:       item.LSAheader, l: item.Content,
+			})
+		}
+	}
+	return err
+}
+
 func (a *Area) lsDbInstallNewLSA(lsa packet.LSAdvertisement, isNeighborLSRxmChecked bool) {
 	// Installing a new LSA in the database, either as the result of
 	//        flooding or a newly self-originated LSA, may cause the OSPF
@@ -34,61 +88,12 @@ func (a *Area) lsDbInstallNewLSA(lsa packet.LSAdvertisement, isNeighborLSRxmChec
 		// TODO: recalculate route
 	}
 	// install new LSA into DB
-	var err error
 	// Also, any old instance of the LSA must be removed from the
 	//        database when the new LSA is installed.
 	// This is done by overwriting with same LSIdentity.
-	a.lsDbRw.Lock()
-	defer a.lsDbRw.Unlock()
-	switch lsa.LSType {
-	case layers.RouterLSAtypeV2:
-		var item packet.LSAdv[packet.V2RouterLSA]
-		item, err = lsa.AsV2RouterLSA()
-		if err == nil {
-			a.RouterLSAs[lsa.GetLSAIdentity()] = &LSDBRouterItem{
-				lsaMeta: newLSAMeta(),
-				h:       item.LSAheader, l: item.Content,
-			}
-		}
-	case layers.NetworkLSAtypeV2:
-		var item packet.LSAdv[packet.V2NetworkLSA]
-		item, err = lsa.AsV2NetworkLSA()
-		if err == nil {
-			a.NetworkLSAs[lsa.GetLSAIdentity()] = &LSDBNetworkItem{
-				lsaMeta: newLSAMeta(),
-				h:       item.LSAheader, l: item.Content,
-			}
-		}
-	case layers.SummaryLSANetworktypeV2:
-		var item packet.LSAdv[packet.V2SummaryLSAType3]
-		item, err = lsa.AsV2SummaryLSAType3()
-		if err == nil {
-			a.SummaryLSAs[lsa.GetLSAIdentity()] = &LSDBSummaryItem{
-				lsaMeta: newLSAMeta(),
-				h:       item.LSAheader, l: item.Content.V2SummaryLSAImpl,
-			}
-		}
-	case layers.SummaryLSAASBRtypeV2:
-		var item packet.LSAdv[packet.V2SummaryLSAType4]
-		item, err = lsa.AsV2SummaryLSAType4()
-		if err == nil {
-			a.SummaryLSAs[lsa.GetLSAIdentity()] = &LSDBSummaryItem{
-				lsaMeta: newLSAMeta(),
-				h:       item.LSAheader, l: item.Content.V2SummaryLSAImpl,
-			}
-		}
-	case layers.ASExternalLSAtypeV2:
-		var item packet.LSAdv[packet.V2ASExternalLSA]
-		item, err = lsa.AsV2ASExternalLSA()
-		if err == nil {
-			a.ins.lsDbSetExtLSA(lsa.GetLSAIdentity(), &LSDBASExternalItem{
-				lsaMeta: newLSAMeta(),
-				h:       item.LSAheader, l: item.Content,
-			})
-		}
-	}
+	err := a.lsDbInstallLSA(lsa, newLSAMeta())
 	if err != nil {
-		logErr("Area %v err install LSA: %v\n%+v", a.AreaId, err, lsa)
+		logErr("Area %v err install new LSA: %v\n%+v", a.AreaId, err, lsa)
 	} else if !isNeighborLSRxmChecked {
 		// This old instance must also be removed from all neighbors' Link state retransmission lists (see Section 10).
 		a.removeAllNeighborsLSRetransmission(h.GetLSAIdentity())
@@ -108,6 +113,21 @@ func (a *Area) lsDbGetDatabaseSummary() (ret []packet.LSAIdentity) {
 		ret = append(ret, l.h.GetLSAIdentity())
 	}
 	return
+}
+
+func (a *Area) lsDbDeleteLSAByIdentity(id packet.LSAIdentity) {
+	a.lsDbRw.Lock()
+	defer a.lsDbRw.Unlock()
+	switch id.LSType {
+	case layers.RouterLSAtypeV2:
+		delete(a.RouterLSAs, id)
+	case layers.NetworkLSAtypeV2:
+		delete(a.NetworkLSAs, id)
+	case layers.SummaryLSANetworktypeV2, layers.SummaryLSAASBRtypeV2:
+		delete(a.SummaryLSAs, id)
+	case layers.ASExternalLSAtypeV2:
+		a.ins.lsDbDeleteExtLSA(id)
+	}
 }
 
 func (a *Area) lsDbGetLSAheaderByIdentity(ids ...packet.LSAIdentity) (ret []packet.LSAheader) {
@@ -173,6 +193,19 @@ func (lm *lsaMeta) updateLastFloodTime() {
 	lm.rw.Lock()
 	defer lm.rw.Unlock()
 	lm.lastFloodTime = time.Now()
+}
+
+func (lm *lsaMeta) premature() {
+	lm.rw.Lock()
+	defer lm.rw.Unlock()
+	lm.doNotRefresh = true
+	lm.ctime.Add(-packet.MaxAge * time.Second)
+}
+
+func (lm *lsaMeta) isDoNotRefresh() bool {
+	lm.rw.RLock()
+	defer lm.rw.RUnlock()
+	return lm.doNotRefresh
 }
 
 func (a *Area) getLSReqListFromDD(dd *packet.OSPFv2Packet[packet.DbDescPayload]) (ret []packet.LSAheader) {
@@ -267,35 +300,72 @@ func (a *Area) isSelfOriginatedLSA(l packet.LSAheader) bool {
 }
 
 type agedOutLSA struct {
+	BelongsArea      *Area
 	Id               packet.LSAIdentity
 	IsSelfOriginated bool
+	DoNotRefresh     bool
 }
 
-func (a *Area) agingLSA() (maxAged []agedOutLSA) {
+func (a *Area) agingIntraLSA() (maxAged []agedOutLSA) {
 	a.lsDbRw.Lock()
 	defer a.lsDbRw.Unlock()
 
 	for id, l := range a.RouterLSAs {
-		if l.aging() >= packet.MaxAge {
+		isSelfOriginated := a.isSelfOriginatedLSA(l.h)
+		age := l.doAging()
+		if age >= packet.MaxAge || (isSelfOriginated && age >= packet.LSRefreshTime) {
 			maxAged = append(maxAged, agedOutLSA{
-				id, a.isSelfOriginatedLSA(l.h),
+				a, id, isSelfOriginated, l.isDoNotRefresh(),
 			})
 		}
 	}
 	for id, l := range a.NetworkLSAs {
-		if l.aging() >= packet.MaxAge {
+		isSelfOriginated := a.isSelfOriginatedLSA(l.h)
+		age := l.doAging()
+		if age >= packet.MaxAge || (isSelfOriginated && age >= packet.LSRefreshTime) {
 			maxAged = append(maxAged, agedOutLSA{
-				id, a.isSelfOriginatedLSA(l.h),
+				a, id, isSelfOriginated, l.isDoNotRefresh(),
 			})
 		}
 	}
 	for id, l := range a.SummaryLSAs {
-		if l.aging() >= packet.MaxAge {
+		isSelfOriginated := a.isSelfOriginatedLSA(l.h)
+		age := l.doAging()
+		if age >= packet.MaxAge || (isSelfOriginated && age >= packet.LSRefreshTime) {
 			maxAged = append(maxAged, agedOutLSA{
-				id, a.isSelfOriginatedLSA(l.h),
+				a, id, isSelfOriginated, l.isDoNotRefresh(),
 			})
 		}
 	}
 
 	return
+}
+
+func (a *Area) lsDbFlushMaxAgedLSA(id packet.LSAIdentity) {
+	//   A MaxAge LSA must be removed immediately from the router's link
+	//    state database as soon as both a) it is no longer contained on any
+	//    neighbor Link state retransmission lists and b) none of the router's
+	//    neighbors are in states Exchange or Loading.
+	var (
+		isInAnyNeighborsReTransmissionList = false
+		isAnyNeighobNotFullyAdjed          = false
+	)
+	for _, i := range a.Interfaces {
+		i.rangeOverNeighbors(func(nb *Neighbor) bool {
+			nbSt := nb.currState()
+			if nbSt == NeighborExchange || nbSt == NeighborLoading {
+				isAnyNeighobNotFullyAdjed = true
+				return false
+			}
+			if nb.isInLSRetransmissionList(id) {
+				isInAnyNeighborsReTransmissionList = true
+				return false
+			}
+			return true
+		})
+	}
+	if !isInAnyNeighborsReTransmissionList && !isAnyNeighobNotFullyAdjed {
+		a.lsDbDeleteLSAByIdentity(id)
+		logDebug("Area %v successfully flushed MaxAged LSA: %+v", a.AreaId, id)
+	}
 }

@@ -598,6 +598,7 @@ func (i *Interface) getNeighbor(rtId uint32) (nb *Neighbor, ok bool) {
 func (i *Interface) removeNeighbor(nb *Neighbor) {
 	i.nbMu.Lock()
 	defer i.nbMu.Unlock()
+	nb.clearAllGoroutine()
 	delete(i.Neighbors, nb.NeighborId)
 }
 

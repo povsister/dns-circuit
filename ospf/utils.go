@@ -58,6 +58,12 @@ func (t *TickerFunc) Stop() {
 	}
 }
 
+func (t *TickerFunc) Suspend() {
+	if t != nil {
+		t.t.Stop()
+	}
+}
+
 func (t *TickerFunc) Reset() {
 	if t != nil {
 		t.t.Reset(t.dur)

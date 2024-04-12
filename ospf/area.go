@@ -86,6 +86,12 @@ type Area struct {
 	// destinations).
 	SummaryLSAs map[packet.LSAIdentity]*LSDBSummaryItem
 
+	pendingWrappingLSAsRw sync.RWMutex
+	// LSAs that reaches MaxSequenceNumber must be flushed out from the
+	// routing domain. Then install and re-flooded into domain.
+	pendingWrappingLSAs []packet.LSAdvertisement
+	// pendingWrappingLSAs are checked whether it can be re-flooded every tick.
+	pendingWrappingLSAsTicker *TickerFunc
 	// This parameter indicates whether the area can carry data traffic
 	// that neither originates nor terminates in the area itself. This
 	// parameter is calculated when the area's shortest-path tree is
@@ -126,7 +132,7 @@ type LSDBRouterItem struct {
 	l packet.V2RouterLSA
 }
 
-func (l *LSDBRouterItem) aging() uint16 {
+func (l *LSDBRouterItem) doAging() uint16 {
 	l.h.LSAge = l.age()
 	return l.h.LSAge
 }
@@ -137,7 +143,7 @@ type LSDBNetworkItem struct {
 	l packet.V2NetworkLSA
 }
 
-func (l *LSDBNetworkItem) aging() uint16 {
+func (l *LSDBNetworkItem) doAging() uint16 {
 	l.h.LSAge = l.age()
 	return l.h.LSAge
 }
@@ -148,7 +154,7 @@ type LSDBSummaryItem struct {
 	l packet.V2SummaryLSAImpl
 }
 
-func (l *LSDBSummaryItem) aging() uint16 {
+func (l *LSDBSummaryItem) doAging() uint16 {
 	l.h.LSAge = l.age()
 	return l.h.LSAge
 }
@@ -156,10 +162,13 @@ func (l *LSDBSummaryItem) aging() uint16 {
 type lsaMeta struct {
 	rw            sync.RWMutex
 	ctime         time.Time
+	doNotRefresh  bool
 	lastFloodTime time.Time
 }
 
 func (lm *lsaMeta) age() uint16 {
+	lm.rw.RLock()
+	defer lm.rw.RUnlock()
 	age := time.Since(lm.ctime)
 	if age >= 0 && age <= time.Second*packet.MaxAge {
 		return uint16(age.Seconds())

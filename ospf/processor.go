@@ -81,7 +81,7 @@ func (a *Area) procHello(i *Interface, h *ipv4.Header, hello *packet.OSPFv2Packe
 			// for the reason that rt priority is always 0.
 			// just some handy addon
 			if i.changeDRAndBDR(neighbor.NeighborsDR, neighbor.NeighborsBDR) {
-				a.updateLSDBWhenDRorBDRChanged(i)
+				a.updateSelfOriginatedLSAWhenDRorBDRChanged(i)
 			}
 			// If the router itself appears in this list, the
 			// neighbor state machine should be executed with the event 2-WayReceived.
@@ -445,7 +445,7 @@ func (a *Area) procLSU(i *Interface, h *ipv4.Header, lsu *packet.OSPFv2Packet[pa
 			//            occurrence should be noted for later use by the
 			//            acknowledgment process (Section 13.5).
 			// 调整一下顺序，因为目前flooding依赖从LSDB读取LSA，所以先install LSA
-			a.ins.floodLSA(a, i, l, lsu.RouterID)
+			a.ins.floodLSA(a, i, l.LSAheader, lsu.RouterID)
 
 			// (e) Possibly acknowledge the receipt of the LSA by sending a
 			//            Link State Acknowledgment packet back out the receiving

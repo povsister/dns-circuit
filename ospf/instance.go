@@ -88,7 +88,7 @@ type LSDBASExternalItem struct {
 	l packet.V2ASExternalLSA
 }
 
-func (l *LSDBASExternalItem) aging() uint16 {
+func (l *LSDBASExternalItem) doAging() uint16 {
 	l.h.LSAge = l.age()
 	return l.h.LSAge
 }
@@ -106,13 +106,21 @@ func (i *Instance) lsDbSetExtLSA(id packet.LSAIdentity, item *LSDBASExternalItem
 	i.ASExternalLSAs[id] = item
 }
 
+func (i *Instance) lsDbDeleteExtLSA(id packet.LSAIdentity) {
+	i.extRw.Lock()
+	defer i.extRw.Unlock()
+	delete(i.ASExternalLSAs, id)
+}
+
 func (i *Instance) agingExternalLSA() (maxAged []agedOutLSA) {
 	i.extRw.Lock()
 	defer i.extRw.Unlock()
 	for id, l := range i.ASExternalLSAs {
-		if l.aging() >= packet.MaxAge {
+		isSelfOriginated := l.h.AdvRouter == i.RouterId
+		age := l.doAging()
+		if age >= packet.MaxAge || (isSelfOriginated && age >= packet.LSRefreshTime) {
 			maxAged = append(maxAged, agedOutLSA{
-				id, l.h.AdvRouter == i.RouterId,
+				i.Backbone, id, isSelfOriginated, l.isDoNotRefresh(),
 			})
 		}
 	}
@@ -127,24 +135,48 @@ func (i *Instance) start() {
 	i.Backbone.start()
 }
 
+// this is needed when some LSA need to premature.
+// it prevents LSA from being accidentally refreshed while setting its age to MaxAge.
+func (i *Instance) suspendAgingLSDB() {
+	i.lsDbAgingTicker.Stop()
+}
+
+func (i *Instance) continueAgingLSDB() {
+	i.lsDbAgingTicker.Reset()
+}
+
 func (i *Instance) agingLSDB(lastTotalMaxAged int) int {
 	var totalMaxAged []agedOutLSA
-	totalMaxAged = append(totalMaxAged, i.Backbone.agingLSA()...)
-	for _, a := range i.Areas {
-		totalMaxAged = append(totalMaxAged, a.agingLSA()...)
+	for _, a := range append(i.Areas, i.Backbone) {
+		totalMaxAged = append(totalMaxAged, a.agingIntraLSA()...)
 	}
 	totalMaxAged = append(totalMaxAged, i.agingExternalLSA()...)
 	if lastTotalMaxAged != len(totalMaxAged) {
 		logDebug("Aging LSDB done. Total max aged: %v\n%+v", len(totalMaxAged), totalMaxAged)
 	}
+	if len(totalMaxAged) > 0 {
+		i.flushOrRefreshAgedOutLSAs(totalMaxAged)
+	}
 	return len(totalMaxAged)
+}
+
+func (i *Instance) flushOrRefreshAgedOutLSAs(all []agedOutLSA) {
+	for _, l := range all {
+		if l.IsSelfOriginated {
+			if !l.DoNotRefresh {
+				l.BelongsArea.refreshSelfOriginatedLSA(l.Id)
+			}
+		} else {
+			l.BelongsArea.lsDbFlushMaxAgedLSA(l.Id)
+		}
+	}
 }
 
 func (i *Instance) shutdown() {
 	i.Backbone.shutdown()
 }
 
-func (i *Instance) floodLSA(fromArea *Area, fromIfi *Interface, l packet.LSAdvertisement, fromRtId uint32) {
+func (i *Instance) floodLSA(fromArea *Area, fromIfi *Interface, l packet.LSAheader, fromRtId uint32) {
 	// Depending upon the LSA's LS type, the LSA can be flooded out
 	//        only certain interfaces.  These interfaces, defined by the
 	//        following, are called the eligible interfaces:
@@ -212,7 +244,7 @@ func (i *Instance) floodLSA(fromArea *Area, fromIfi *Interface, l packet.LSAdver
 			//                already.  Compare the new LSA to the neighbor's copy:
 			if nbSt == NeighborExchange || nbSt == NeighborLoading {
 				if lsr, ok := nb.getFromLSReqList(l.GetLSAIdentity()); ok {
-					if lsr.IsMoreRecentThan(l.LSAheader) {
+					if lsr.IsMoreRecentThan(l) {
 						logDebug("LSA in LSReqList in newer, still need this req")
 						//If the new LSA is less recent, then examine the next neighbor.
 						return true
@@ -241,6 +273,8 @@ func (i *Instance) floodLSA(fromArea *Area, fromIfi *Interface, l packet.LSAdver
 			//                This ensures that the flooding procedure is reliable;
 			//                the LSA will be retransmitted at intervals until an
 			//                acknowledgment is seen from the neighbor.
+			// Note that this will not immediately send out a LSU.
+			// It's only for re-transmission purpose.
 			nb.addToLSRetransmissionList(l.GetLSAIdentity())
 			addedToNebosReTransmissionList = true
 			return true
