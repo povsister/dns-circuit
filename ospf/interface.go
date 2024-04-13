@@ -602,6 +602,12 @@ func (i *Interface) removeNeighbor(nb *Neighbor) {
 	defer i.nbMu.Unlock()
 	nb.clearAllGoroutine()
 	delete(i.Neighbors, nb.NeighborId)
+	// we are not DR or BDR because of zero priority.
+	// so remember to reset DR or BDR when neighbor disappear
+	nbAddr := ipv4BytesToUint32(nb.NeighborAddress.To4())
+	if nbAddr == i.DR.Load() || nbAddr == i.BDR.Load() {
+		i.changeDRAndBDR(0, 0)
+	}
 }
 
 func (i *Interface) killAllNeighbor() {
