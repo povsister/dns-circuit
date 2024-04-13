@@ -149,12 +149,12 @@ type Neighbor struct {
 	//        capabilities (see Section 10.5).  The optional OSPF capabilities
 	//        are documented in Section 4.5.
 	NeighborOptions packet.BitOption
-	// The neighbor's idea of the Designated Router.  If this is the
+	// The neighbor's idea of the Designated Router address.  If this is the
 	//        neighbor itself, this is important in the local calculation of
 	//        the Designated Router.  Defined only on broadcast and NBMA
 	//        networks.
 	NeighborsDR uint32
-	// The neighbor's idea of the Backup Designated Router.  If this is
+	// The neighbor's idea of the Backup Designated Router address.  If this is
 	//        the neighbor itself, this is important in the local calculation
 	//        of the Backup Designated Router.  Defined only on broadcast and
 	//        NBMA networks.
@@ -246,7 +246,12 @@ func (n *Neighbor) transState(target NeighborState) {
 }
 
 func (n *Neighbor) shouldFormAdjacency() bool {
-	return true
+	// for now we form adj only if the neighbor is DR or BDR
+	nbAddr := ipv4BytesToUint32(n.NeighborAddress.To4())
+	if nbAddr == n.i.DR.Load() || nbAddr == n.i.BDR.Load() {
+		return true
+	}
+	return false
 }
 
 type NeighborStateChangingEvent int

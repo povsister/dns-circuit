@@ -104,11 +104,12 @@ func (a *Area) procHello(i *Interface, h *ipv4.Header, hello *packet.OSPFv2Packe
 		// packet is equal to 0.0.0.0 and the receiving interface is in
 		// state Waiting, the receiving interface's state machine is
 		// scheduled with the event BackupSeen.
-		if i.currState() == InterfaceWaiting && neighborId == hello.Content.DesignatedRouterID &&
+		nbAddr := ipv4BytesToUint32(neighbor.NeighborAddress.To4())
+		if i.currState() == InterfaceWaiting && nbAddr == hello.Content.DesignatedRouterID &&
 			hello.Content.BackupDesignatedRouterID == 0 {
 			i.consumeEvent(IfEvBackupSeen)
-		} else if neighborId == hello.Content.DesignatedRouterID &&
-			neighbor.NeighborsDR != neighborId {
+		} else if nbAddr == hello.Content.DesignatedRouterID &&
+			neighbor.NeighborsDR != nbAddr {
 			// Otherwise, if the neighbor is declaring itself to be Designated Router and it
 			// had not previously, or the neighbor is not declaring itself
 			// Designated Router where it had previously, the receiving
@@ -120,10 +121,10 @@ func (a *Area) procHello(i *Interface, h *ipv4.Header, hello *packet.OSPFv2Packe
 		// Neighbor IP address) and the receiving interface is in state
 		// Waiting, the receiving interface's state machine is
 		// scheduled with the event BackupSeen.
-		if i.currState() == InterfaceWaiting && neighborId == hello.Content.BackupDesignatedRouterID {
+		if i.currState() == InterfaceWaiting && nbAddr == hello.Content.BackupDesignatedRouterID {
 			i.consumeEvent(IfEvBackupSeen)
-		} else if neighborId == hello.Content.BackupDesignatedRouterID &&
-			neighbor.NeighborsBDR != neighborId {
+		} else if nbAddr == hello.Content.BackupDesignatedRouterID &&
+			neighbor.NeighborsBDR != nbAddr {
 			// Otherwise, if the neighbor is declaring itself to be Backup Designated Router
 			// and it had not previously, or the neighbor is not declaring
 			// itself Backup Designated Router where it had previously, the
