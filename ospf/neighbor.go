@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/gopacket/gopacket/layers"
+	"golang.org/x/net/ipv4"
 
 	"github.com/povsister/dns-circuit/ospf/packet"
 )
@@ -787,18 +788,24 @@ func (n *Neighbor) sendOutTopLSR() int {
 	if len(n.LSRequest) <= 0 {
 		return 0
 	}
-	firstReq := n.LSRequest[0].GetLSReq()
+	// calculate max cnt by MTU
+	maxCnt := (int(n.i.MTU) - ipv4.HeaderLen - 24) / packet.LSReq{}.Size()
+	singleFlightMax := min(maxCnt, len(n.LSRequest))
+	payloads := make([]packet.LSReq, 0, singleFlightMax)
+	for i := 0; i < singleFlightMax; i++ {
+		payloads = append(payloads, n.LSRequest[i].GetLSReq())
+	}
 	lsr := &packet.OSPFv2Packet[packet.LSRequestPayload]{
 		OSPFv2: n.i.Area.ospfPktHeader(func(p *packet.LayerOSPFv2) {
 			p.Type = layers.OSPFLinkStateRequest
 		}),
-		Content: packet.LSRequestPayload{firstReq},
+		Content: packet.LSRequestPayload(payloads),
 	}
 	n.i.queuePktForSend(sendPkt{
 		dst: ipv4BytesToUint32(n.NeighborAddress.To4()),
 		p:   lsr,
 	})
-	return 1
+	return singleFlightMax
 }
 
 func (n *Neighbor) clearLSRetransmissionList() {
