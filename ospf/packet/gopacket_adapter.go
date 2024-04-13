@@ -122,11 +122,27 @@ func (p LSAdvertisement) AsV2NetworkLSA() (ret LSAdv[V2NetworkLSA], err error) {
 }
 
 func (p LSAdvertisement) AsV2SummaryLSAType3() (ret LSAdv[V2SummaryLSAType3], err error) {
+	if p.LSA.Content == nil {
+		if abrSm, ok := p.Content.(V2SummaryLSAImpl); ok {
+			return LSAdv[V2SummaryLSAType3]{
+				LSAdvertisement: p,
+				Content:         V2SummaryLSAType3{abrSm},
+			}, nil
+		}
+	}
 	err = fmt.Errorf("err V2SummaryLSAType3 %w", ErrNotImplemented)
 	return
 }
 
 func (p LSAdvertisement) AsV2SummaryLSAType4() (ret LSAdv[V2SummaryLSAType4], err error) {
+	if p.LSA.Content == nil {
+		if asbrSm, ok := p.Content.(V2SummaryLSAImpl); ok {
+			return LSAdv[V2SummaryLSAType4]{
+				LSAdvertisement: p,
+				Content:         V2SummaryLSAType4{asbrSm},
+			}, nil
+		}
+	}
 	err = fmt.Errorf("err V2SummaryLSAType4 %w", ErrNotImplemented)
 	return
 }

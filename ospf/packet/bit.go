@@ -102,3 +102,17 @@ const (
 	//        (V is for virtual link endpoint).
 	RouterLSAFlagVbit = 2
 )
+
+const (
+	//       +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+	//       |E|     0       |                  metric                       |
+	//       +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+	// ASExternalLSAFlagEbit The type of external metric.  If bit E is set, the metric
+	// specified is a Type 2 external metric.  This means the metric is
+	// considered larger than any link state path.  If bit E is zero,
+	// the specified metric is a Type 1 external metric.  This means
+	// that it is expressed in the same units as the link state metric
+	// i.e., the same units as interface cost).
+	ASExternalLSAFlagEbit = 7
+)

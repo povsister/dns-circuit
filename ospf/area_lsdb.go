@@ -81,7 +81,7 @@ func (a *Area) lsDbInstallReceivedLSA(lsa packet.LSAdvertisement) {
 	//a.removeAllNeighborsLSRetransmission(h.GetLSAIdentity())
 }
 
-func (a *Area) lsDbInstallNewLSA(lsa packet.LSAdvertisement) {
+func (a *Area) lsDbInstallNewLSA(lsa packet.LSAdvertisement) bool {
 	if a.recalculateRoutingTableIfNecessary(lsa.LSAheader) {
 		defer a.ins.recalculateRoutes()
 	}
@@ -92,7 +92,9 @@ func (a *Area) lsDbInstallNewLSA(lsa packet.LSAdvertisement) {
 	err := a.lsDbInstallLSA(lsa, newLSAMeta())
 	if err != nil {
 		logErr("Area %v err install new LSA: %v\n%+v", a.AreaId, err, lsa)
+		return false
 	}
+	return true
 }
 
 func (a *Area) recalculateRoutingTableIfNecessary(lh packet.LSAheader) (shouldRecalculateRoute bool) {
@@ -133,6 +135,16 @@ func (a *Area) lsDbGetDatabaseSummary() (ret []packet.LSAIdentity) {
 	a.lsDbRw.RLock()
 	defer a.lsDbRw.RUnlock()
 	for _, l := range a.RouterLSAs {
+		ret = append(ret, l.h.GetLSAIdentity())
+	}
+	for _, l := range a.NetworkLSAs {
+		ret = append(ret, l.h.GetLSAIdentity())
+	}
+	a.ins.lsDbRangeExtLSA(func(id packet.LSAIdentity, _ *LSDBASExternalItem) bool {
+		ret = append(ret, id)
+		return true
+	})
+	for _, l := range a.SummaryLSAs {
 		ret = append(ret, l.h.GetLSAIdentity())
 	}
 	return

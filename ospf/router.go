@@ -54,6 +54,7 @@ func NewRouter(ifName string, addr string, rtid string) (*Router, error) {
 				Mask: net.IPv4Mask(255, 255, 255, 0),
 			},
 			IfName: ifName,
+			ASBR:   true,
 		}),
 	}
 	r.routerId = r.ins.RouterId

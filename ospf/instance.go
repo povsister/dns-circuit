@@ -17,12 +17,15 @@ type InstanceConfig struct {
 	RouterDeadInterval uint32
 	Network            *net.IPNet
 	IfName             string
+	ASBR               bool
 }
 
 func NewInstance(ctx context.Context, c *InstanceConfig) *Instance {
 	ins := &Instance{
-		ctx:      ctx,
-		RouterId: c.RouterId,
+		ctx:            ctx,
+		RouterId:       c.RouterId,
+		ASBR:           c.ASBR,
+		ASExternalLSAs: make(map[packet.LSAIdentity]*LSDBASExternalItem),
 	}
 	ins.Backbone = NewArea(ctx, &AreaConfig{
 		Instance: ins,
@@ -46,6 +49,7 @@ type Instance struct {
 	ctx context.Context
 
 	RouterId uint32
+	ASBR     bool
 	// The OSPF backbone area is responsible for the dissemination of
 	//        inter-area routing information.
 	Backbone *Area
@@ -104,6 +108,16 @@ func (i *Instance) lsDbSetExtLSA(id packet.LSAIdentity, item *LSDBASExternalItem
 	i.extRw.Lock()
 	defer i.extRw.Unlock()
 	i.ASExternalLSAs[id] = item
+}
+
+func (i *Instance) lsDbRangeExtLSA(next func(id packet.LSAIdentity, item *LSDBASExternalItem) bool) {
+	i.extRw.RLock()
+	defer i.extRw.RUnlock()
+	for id, item := range i.ASExternalLSAs {
+		if !next(id, item) {
+			return
+		}
+	}
 }
 
 func (i *Instance) lsDbDeleteExtLSA(id packet.LSAIdentity) {
@@ -364,6 +378,28 @@ func (i *Instance) floodLSA(fromArea *Area, fromIfi *Interface, l packet.LSAhead
 			//            addresses.
 			ifi.immediateTickNeighborsRetransmissionList()
 		}
+	}
+}
+
+func (i *Instance) addTestASBRLSA() {
+	l := packet.LSAdvertisement{
+		LSAheader: packet.LSAheader{
+			LSType:      layers.ASExternalLSAtypeV2,
+			LinkStateID: ipv4BytesToUint32(net.IPv4(142, 251, 220, 0).To4()), // google
+			AdvRouter:   i.RouterId,
+			LSSeqNumber: packet.InitialSequenceNumber,
+			LSOptions:   uint8(packet.BitOption(0).SetBit(packet.CapabilityEbit)),
+		},
+		Content: packet.V2ASExternalLSA{
+			NetworkMask: ipv4MaskToUint32(net.IPv4Mask(255, 255, 255, 0)),
+			ExternalBit: uint8(packet.BitOption(0).SetBit(packet.ASExternalLSAFlagEbit)),
+			Metric:      10000,
+		},
+	}
+	if !i.Backbone.tryUpdatingExistingLSA(l.GetLSAIdentity(), nil, func(lsa *packet.LSAdvertisement) {
+		lsa.Content = l.Content
+	}) {
+		i.Backbone.originatingNewLSA(l)
 	}
 }
 

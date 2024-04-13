@@ -17,7 +17,7 @@ type AreaConfig struct {
 }
 
 func NewArea(ctx context.Context, c *AreaConfig) *Area {
-	return &Area{
+	a := &Area{
 		ctx:                       ctx,
 		ins:                       c.Instance,
 		AreaId:                    c.AreaId,
@@ -29,6 +29,7 @@ func NewArea(ctx context.Context, c *AreaConfig) *Area {
 		ExternalRoutingCapability: c.Options.IsBitSet(packet.CapabilityEbit),
 		TransitCapability:         true,
 	}
+	return a
 }
 
 func (a *Area) AddInterface(c *InterfaceConfig) {

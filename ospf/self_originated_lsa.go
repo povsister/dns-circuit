@@ -32,7 +32,13 @@ func (i *Interface) newRouterLSA() packet.LSAdvertisement {
 		},
 		Content: packet.V2RouterLSA{
 			RouterLSAV2: layers.RouterLSAV2{
-				Flags: 0,
+				Flags: func() uint8 {
+					ret := packet.BitOption(0)
+					if i.Area.ins.ASBR {
+						ret = ret.SetBit(packet.RouterLSAFlagEbit)
+					}
+					return uint8(ret)
+				}(),
 				Links: 1,
 			},
 			Routers: []packet.RouterV2{
@@ -82,9 +88,10 @@ func (a *Area) tryUpdatingExistingLSA(id packet.LSAIdentity, i *Interface, modFn
 			a.doLSASeqNumWrappingAndFloodNewLSA(lsa.GetLSAIdentity(), lsa)
 			return true
 		}
-		a.lsDbInstallNewLSA(lsa)
-		logDebug("Area %v successfully updated LSA with interface %v:\n%v", a.AreaId, i.c.ifi.Name, lsa)
-		a.ins.floodLSA(a, i, lsa.LSAheader, a.ins.RouterId)
+		if a.lsDbInstallNewLSA(lsa) {
+			logDebug("Area %v successfully updated LSA with interface %v:\n%v", a.AreaId, i.c.ifi.Name, lsa)
+			a.ins.floodLSA(a, i, lsa.LSAheader, a.ins.RouterId)
+		}
 		return true
 	}
 	return false
@@ -184,9 +191,10 @@ func (a *Area) originatingNewLSA(lsa packet.LSAdvertisement) {
 		logErr("Area %v err fix chkSum while originating new LSA: %v\n%v", a.AreaId, err, lsa)
 		return
 	}
-	a.lsDbInstallNewLSA(lsa)
-	logDebug("Area %v successfully originated new LSA:\n%v", a.AreaId, lsa)
-	a.ins.floodLSA(a, nil, lsa.LSAheader, a.ins.RouterId)
+	if a.lsDbInstallNewLSA(lsa) {
+		logDebug("Area %v successfully originated new LSA:\n%v", a.AreaId, lsa)
+		a.ins.floodLSA(a, nil, lsa.LSAheader, a.ins.RouterId)
+	}
 }
 
 func (a *Area) updateLSDBWhenInterfaceAdd(i *Interface) {
@@ -217,6 +225,23 @@ func (a *Area) updateLSDBWhenInterfaceAdd(i *Interface) {
 		// LSA not found. originating a new one.
 		a.originatingNewLSA(i.newRouterLSA())
 	}
+}
+
+func (a *Area) announceASBR() {
+	a.originatingNewLSA(packet.LSAdvertisement{
+		LSAheader: packet.LSAheader{
+			LSAge:       0,
+			LSType:      layers.SummaryLSAASBRtypeV2,
+			LinkStateID: a.ins.RouterId,
+			AdvRouter:   a.ins.RouterId,
+			LSSeqNumber: packet.InitialSequenceNumber,
+			LSOptions:   uint8(packet.BitOption(0).SetBit(packet.CapabilityEbit)),
+		},
+		Content: packet.V2SummaryLSAImpl{
+			NetworkMask: 0,
+			Metric:      20,
+		},
+	})
 }
 
 func (a *Area) updateSelfOriginatedLSAWhenDRorBDRChanged(i *Interface) {
