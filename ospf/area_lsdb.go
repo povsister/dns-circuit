@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/gopacket/gopacket/layers"
+	"golang.org/x/net/ipv4"
 
 	"github.com/povsister/dns-circuit/ospf/packet"
 )
@@ -260,21 +261,38 @@ func (a *Area) respondLSReqWithLSU(n *Neighbor, reqs []packet.LSReq) (err error)
 	if len(lsas) <= 0 {
 		return nil
 	}
-	pkt := sendPkt{
-		dst: ipv4BytesToUint32(n.NeighborAddress.To4()),
-		p: &packet.OSPFv2Packet[packet.LSUpdatePayload]{
-			OSPFv2: a.ospfPktHeader(func(p *packet.LayerOSPFv2) {
-				p.Type = layers.OSPFLinkStateUpdate
-			}),
-			Content: packet.LSUpdatePayload{
-				LSUpdate: layers.LSUpdate{
-					NumOfLSAs: uint32(len(lsas)),
+	// send as many as LSUs per MTU limit
+	lastIdx := 0
+	for lastIdx < len(lsas) {
+		var (
+			lastLSASize          = 0
+			singleFlightPayloads []packet.LSAdvertisement
+		)
+		for remainBytes := int(n.i.MTU) - ipv4.HeaderLen - 24; remainBytes > 0; remainBytes -= lastLSASize {
+			if lastIdx >= len(lsas) {
+				break
+			}
+			thisLSA := lsas[lastIdx]
+			lastLSASize = thisLSA.Size()
+			lastIdx++
+			singleFlightPayloads = append(singleFlightPayloads, thisLSA)
+		}
+		pkt := sendPkt{
+			dst: ipv4BytesToUint32(n.NeighborAddress.To4()),
+			p: &packet.OSPFv2Packet[packet.LSUpdatePayload]{
+				OSPFv2: a.ospfPktHeader(func(p *packet.LayerOSPFv2) {
+					p.Type = layers.OSPFLinkStateUpdate
+				}),
+				Content: packet.LSUpdatePayload{
+					LSUpdate: layers.LSUpdate{
+						NumOfLSAs: uint32(len(singleFlightPayloads)),
+					},
+					LSAs: singleFlightPayloads,
 				},
-				LSAs: lsas,
 			},
-		},
+		}
+		n.i.queuePktForSend(pkt)
 	}
-	n.i.queuePktForSend(pkt)
 	return
 }
 
