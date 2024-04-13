@@ -462,7 +462,7 @@ func (i *Interface) runReadDispatchLoop() {
 		for {
 			select {
 			case <-i.ctx.Done():
-				logDebug("Exiting runReadDispatchLoop")
+				logDebug("Exiting %v runReadDispatchLoop", i.c.ifi.Name)
 				i.wg.Done()
 				return
 			case pkt := <-i.pendingProcessPkt:
@@ -485,7 +485,7 @@ func (i *Interface) runReadLoop() {
 		for {
 			select {
 			case <-i.ctx.Done():
-				logDebug("Exiting runReadLoop")
+				logDebug("Exiting %v runReadLoop", i.c.ifi.Name)
 				i.wg.Done()
 				return
 			default:
@@ -525,7 +525,7 @@ func (i *Interface) runSendLoop() {
 		for {
 			select {
 			case <-i.ctx.Done():
-				logDebug("Exiting runSendLoop")
+				logDebug("Exiting %v runSendLoop", i.c.ifi.Name)
 				i.wg.Done()
 				return
 			case pkt := <-i.pendingSendPkt:

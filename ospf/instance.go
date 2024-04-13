@@ -112,6 +112,26 @@ func (i *Instance) lsDbDeleteExtLSA(id packet.LSAIdentity) {
 	delete(i.ASExternalLSAs, id)
 }
 
+func (i *Instance) lsDbFlushExtLSA(a *Area) {
+	var selfOriginated []packet.LSAIdentity
+	defer func() {
+		if len(selfOriginated) > 0 {
+			logDebug("Area %v flushing %d self-originated external LSAs before shutting down",
+				a.AreaId, len(selfOriginated))
+		}
+		for _, id := range selfOriginated {
+			a.prematureLSA(id)
+		}
+	}()
+	i.extRw.RLock()
+	defer i.extRw.RUnlock()
+	for _, extLSA := range i.ASExternalLSAs {
+		if a.isSelfOriginatedLSA(extLSA.h) {
+			selfOriginated = append(selfOriginated, extLSA.h.GetLSAIdentity())
+		}
+	}
+}
+
 func (i *Instance) agingExternalLSA() (maxAged []agedOutLSA) {
 	i.extRw.Lock()
 	defer i.extRw.Unlock()
@@ -177,7 +197,10 @@ func (i *Instance) flushOrRefreshAgedOutLSAs(all []agedOutLSA) {
 }
 
 func (i *Instance) shutdown() {
-	i.Backbone.shutdown()
+	for _, a := range append(i.Areas, i.Backbone) {
+		i.lsDbFlushExtLSA(a)
+		a.shutdown()
+	}
 }
 
 func (i *Instance) floodLSA(fromArea *Area, fromIfi *Interface, l packet.LSAheader, fromRtId uint32) {

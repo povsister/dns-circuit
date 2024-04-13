@@ -391,3 +391,64 @@ func (a *Area) lsDbFlushMaxAgedLSA(id packet.LSAIdentity) {
 		logDebug("Area %v successfully flushed MaxAged LSA: %+v", a.AreaId, id)
 	}
 }
+
+func (a *Area) lsDbFlushAllSelfOriginatedLSA() {
+	var selfOriginated []packet.LSAIdentity
+	defer func() {
+		if len(selfOriginated) > 0 {
+			logDebug("Area %v flushing %d self-originated LSAs before shutting down",
+				a.AreaId, len(selfOriginated))
+		}
+		for _, id := range selfOriginated {
+			a.prematureLSA(id)
+		}
+		closeCh := make(chan struct{})
+		go func() {
+			// check if LSRxtmEmpty
+			for {
+				hasNonEmptyLSRxtm := false
+				for _, ifi := range a.Interfaces {
+					ifi.rangeOverNeighbors(func(nb *Neighbor) bool {
+						if !nb.isLSRtxmListEmpty() {
+							hasNonEmptyLSRxtm = true
+							return false
+						}
+						return true
+					})
+				}
+				if !hasNonEmptyLSRxtm {
+					close(closeCh)
+					break
+				}
+				time.Sleep(50 * time.Millisecond)
+			}
+		}()
+		select {
+		case <-closeCh:
+			logDebug("Area %v successfully flushed %d self-originated LSAs",
+				a.AreaId, len(selfOriginated))
+			return
+		case <-time.After(5 * time.Second):
+			logWarn("Area %v timeout while flushing self-originated LSAs before shutting down", a.AreaId)
+			return
+		}
+	}()
+
+	a.lsDbRw.RLock()
+	defer a.lsDbRw.RUnlock()
+	for _, rtLSA := range a.RouterLSAs {
+		if a.isSelfOriginatedLSA(rtLSA.h) {
+			selfOriginated = append(selfOriginated, rtLSA.h.GetLSAIdentity())
+		}
+	}
+	for _, ntLSA := range a.NetworkLSAs {
+		if a.isSelfOriginatedLSA(ntLSA.h) {
+			selfOriginated = append(selfOriginated, ntLSA.h.GetLSAIdentity())
+		}
+	}
+	for _, smLSA := range a.SummaryLSAs {
+		if a.isSelfOriginatedLSA(smLSA.h) {
+			selfOriginated = append(selfOriginated, smLSA.h.GetLSAIdentity())
+		}
+	}
+}

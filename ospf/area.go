@@ -32,7 +32,7 @@ func NewArea(ctx context.Context, c *AreaConfig) *Area {
 }
 
 func (a *Area) AddInterface(c *InterfaceConfig) {
-	i := NewInterface(a.ctx, c)
+	i := NewInterface(context.Background(), c)
 	i.Area = a
 	a.Interfaces = append(a.Interfaces, i)
 	a.updateLSDBWhenInterfaceAdd(i)
@@ -184,6 +184,7 @@ func (a *Area) start() {
 }
 
 func (a *Area) shutdown() {
+	a.lsDbFlushAllSelfOriginatedLSA()
 	for _, ifi := range a.Interfaces {
 		if err := ifi.close(); err != nil {
 			logWarn("Interface %s close err: %v", ifi.c.ifi.Name, err)

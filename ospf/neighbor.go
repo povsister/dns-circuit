@@ -899,6 +899,12 @@ func (n *Neighbor) removeFromLSRetransmissionList(lsa packet.LSAIdentity) {
 	delete(n.LSRetransmission, lsa)
 }
 
+func (n *Neighbor) isLSRtxmListEmpty() bool {
+	n.lsRetransRw.RLock()
+	defer n.lsRetransRw.RUnlock()
+	return len(n.LSRetransmission) <= 0
+}
+
 func (n *Neighbor) isInLSRetransmissionList(l packet.LSAIdentity) bool {
 	n.lsRetransRw.RLock()
 	defer n.lsRetransRw.RUnlock()
