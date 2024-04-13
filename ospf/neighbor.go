@@ -396,6 +396,10 @@ func (n *Neighbor) consumeEvent(e NeighborStateChangingEvent) {
 			//                    transition the neighbor state to ExStart and perform
 			//                    the actions associated with the above state machine
 			//                    entry for state Init and event 2-WayReceived.
+			if n.shouldFormAdjacency() {
+				n.transState(NeighborExStart)
+				n.startMasterNegotiation()
+			}
 		} else if n.currState() >= NeighborExStart {
 			// Determine whether the neighboring router should
 			//                    still be adjacent.  If yes, there is no state change
@@ -406,6 +410,12 @@ func (n *Neighbor) consumeEvent(e NeighborStateChangingEvent) {
 			//                    to 2-Way.  The Link state retransmission list,
 			//                    Database summary list and Link state request list
 			//                    are cleared of LSAs.
+			if !n.shouldFormAdjacency() {
+				n.clearLSRetransmissionList()
+				n.clearLSReqList()
+				clear(n.DatabaseSummary)
+				n.transState(Neighbor2Way)
+			}
 		}
 	case NbEvSeqNumberMismatch:
 		if n.currState() >= NeighborExchange {

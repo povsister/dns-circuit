@@ -621,8 +621,8 @@ func (i *Interface) addNeighbor(h *ipv4.Header, hello *packet.OSPFv2Packet[packe
 		NeighborId:       hello.RouterID,
 		NeighborPriority: hello.Content.RtrPriority,
 		NeighborAddress:  h.Src,
-		NeighborsDR:      0, // will be rechecked later
-		NeighborsBDR:     0, // will be rechecked later
+		NeighborsDR:      hello.Content.DesignatedRouterID,
+		NeighborsBDR:     hello.Content.BackupDesignatedRouterID,
 		LSRetransmission: make(map[packet.LSAIdentity]struct{}),
 	}
 	i.nbMu.Lock()

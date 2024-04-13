@@ -63,6 +63,13 @@ func (a *Area) procHello(i *Interface, h *ipv4.Header, hello *packet.OSPFv2Packe
 	neighbor, ok := i.getNeighbor(neighborId)
 	if !ok {
 		neighbor = i.addNeighbor(h, hello)
+	} else {
+		defer func() {
+			// update RtrPriority / DR / BDR
+			neighbor.NeighborsDR = hello.Content.DesignatedRouterID
+			neighbor.NeighborsBDR = hello.Content.BackupDesignatedRouterID
+			neighbor.NeighborPriority = hello.Content.RtrPriority
+		}()
 	}
 	// Each Hello Packet causes the neighbor state machine to be
 	// executed with the event HelloReceived.
@@ -78,14 +85,15 @@ func (a *Area) procHello(i *Interface, h *ipv4.Header, hello *packet.OSPFv2Packe
 			}
 		}
 		if isMySelfSeen {
+			// If the router itself appears in this list, the
+			// neighbor state machine should be executed with the event 2-WayReceived.
+			neighbor.consumeEvent(NbEv2WayReceived)
 			// for the reason that rt priority is always 0.
 			// just some handy addon
 			if i.changeDRAndBDR(neighbor.NeighborsDR, neighbor.NeighborsBDR) {
 				a.updateSelfOriginatedLSAWhenDRorBDRChanged(i)
+				neighbor.consumeEvent(NbEvIsAdjOK)
 			}
-			// If the router itself appears in this list, the
-			// neighbor state machine should be executed with the event 2-WayReceived.
-			neighbor.consumeEvent(NbEv2WayReceived)
 		} else {
 			// Otherwise, the neighbor state machine should
 			// be executed with the event 1-WayReceived, and the processing of the packet stops.
