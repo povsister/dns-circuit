@@ -161,7 +161,8 @@ func (l *LSDBSummaryItem) doAging() uint16 {
 
 type lsaMeta struct {
 	rw            sync.RWMutex
-	ctime         time.Time
+	ctime         time.Time // used to calculate LSAge
+	recvTime      time.Time // received time while flooding
 	doNotRefresh  bool
 	lastFloodTime time.Time
 }

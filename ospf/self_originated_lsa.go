@@ -82,7 +82,7 @@ func (a *Area) tryUpdatingExistingLSA(id packet.LSAIdentity, i *Interface, modFn
 			a.doLSASeqNumWrappingAndFloodNewLSA(lsa.GetLSAIdentity(), lsa)
 			return true
 		}
-		a.lsDbInstallNewLSA(lsa, false)
+		a.lsDbInstallNewLSA(lsa)
 		logDebug("Area %v successfully updated LSA with interface %v:\n%v", a.AreaId, i.c.ifi.Name, lsa)
 		a.ins.floodLSA(a, i, lsa.LSAheader, a.ins.RouterId)
 		return true
@@ -99,6 +99,7 @@ func (a *Area) doLSASeqNumWrappingAndFloodNewLSA(id packet.LSAIdentity, newLSA p
 	//            InitialSequenceNumber.
 	a.pendingWrappingLSAsRw.Lock()
 	defer a.pendingWrappingLSAsRw.Unlock()
+	a.pendingWrappingLSAs = append(a.pendingWrappingLSAs, newLSA)
 	if a.pendingWrappingLSAsTicker == nil {
 		a.pendingWrappingLSAsTicker = TimeTickerFunc(a.ctx, time.Second, func() {
 			if a.installAndFloodPendingLSA() <= 0 {
@@ -106,7 +107,6 @@ func (a *Area) doLSASeqNumWrappingAndFloodNewLSA(id packet.LSAIdentity, newLSA p
 			}
 		}, true)
 	}
-	a.pendingWrappingLSAs = append(a.pendingWrappingLSAs, newLSA)
 	a.pendingWrappingLSAsTicker.Reset()
 }
 
@@ -129,6 +129,7 @@ func (a *Area) installAndFloodPendingLSA() (remainingLSACnt int) {
 		if !stillNotAckedForPremature {
 			// must re-init the LSSeqNumber
 			lsa.LSSeqNumber = packet.InitialSequenceNumber
+			lsa.LSAge = 0
 			a.originatingNewLSA(lsa)
 		} else {
 			remainedLSAs = append(remainedLSAs, lsa)
@@ -144,6 +145,7 @@ func (a *Area) prematureLSA(id packet.LSAIdentity) {
 		logErr("Area %v err premature LSA(%+v): LSA not found in LSDB", a.AreaId, id)
 		return
 	}
+	logDebug("Area %v is pre-maturing LSA:\n%+v", a.AreaId, lsa)
 	// step to premature
 	// 0 stop LSDB aging (prevent it from been refreshed)
 	// 1 set it age to maxAge, and set a marker to tell aging ticker do not refresh it
@@ -173,6 +175,7 @@ func (a *Area) refreshSelfOriginatedLSA(id packet.LSAIdentity) {
 		return
 	}
 	lsa.LSAge = 0
+	logDebug("Area %v refreshing self-originated LSA: %+v", a.AreaId, id)
 	a.originatingNewLSA(lsa)
 }
 
@@ -181,7 +184,7 @@ func (a *Area) originatingNewLSA(lsa packet.LSAdvertisement) {
 		logErr("Area %v err fix chkSum while originating new LSA: %v\n%v", a.AreaId, err, lsa)
 		return
 	}
-	a.lsDbInstallNewLSA(lsa, true)
+	a.lsDbInstallNewLSA(lsa)
 	logDebug("Area %v successfully originated new LSA:\n%v", a.AreaId, lsa)
 	a.ins.floodLSA(a, nil, lsa.LSAheader, a.ins.RouterId)
 }
@@ -238,5 +241,32 @@ func (a *Area) updateSelfOriginatedLSAWhenDRorBDRChanged(i *Interface) {
 	}) {
 		logErr("Area %v err update RouterLSA while DR/BDR changed with interface %v: unexpected no existing routerLSA found",
 			a.AreaId, i.c.ifi.Name)
+	}
+}
+
+func (a *Area) dealWithReceivedNewerSelfOriginatedLSA(fromIfi *Interface, newerReceivedLSA packet.LSAdvertisement) {
+	// It may be the case the router no longer wishes to originate the
+	//        received LSA. Possible examples include: 1) the LSA is a
+	//        summary-LSA or AS-external-LSA and the router no longer has an
+	//        (advertisable) route to the destination, 2) the LSA is a
+	//        network-LSA but the router is no longer Designated Router for
+	//        the network or 3) the LSA is a network-LSA whose Link State ID
+	//        is one of the router's own IP interface addresses but whose
+	//        Advertising Router is not equal to the router's own Router ID
+	//        (this latter case should be rare, and it indicates that the
+	//        router's Router ID has changed since originating the LSA).  In
+	//        all these cases, instead of updating the LSA, the LSA should be
+	//        flushed from the routing domain by incrementing the received
+	//        LSA's LS age to MaxAge and reflooding (see Section 14.1).
+	logDebug("Area %v adapted newer self-originated LSA from interface %v. Trying incr its SeqNum and re-flood it out",
+		a.AreaId, fromIfi.c.ifi.Name)
+	// TODO: check LSA type  and local LSDB to determine whether incr seqNum or premature it.
+	// For now simply add the LSSeqNum and flood it out.
+	if !a.tryUpdatingExistingLSA(newerReceivedLSA.GetLSAIdentity(), fromIfi, func(lsa *packet.LSAdvertisement) {
+		// it's already installed into LSDB.
+		// and noop is ok.
+	}) {
+		logErr("Area %v err incr LSSeqNum of received newer self-originated LSA with interface %v: target LSA not found in LSDB\n%+v",
+			a.AreaId, fromIfi.c.ifi.Name, newerReceivedLSA)
 	}
 }

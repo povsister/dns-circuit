@@ -152,7 +152,11 @@ func (i *Instance) agingLSDB(lastTotalMaxAged int) int {
 	}
 	totalMaxAged = append(totalMaxAged, i.agingExternalLSA()...)
 	if lastTotalMaxAged != len(totalMaxAged) {
-		logDebug("Aging LSDB done. Total max aged: %v\n%+v", len(totalMaxAged), totalMaxAged)
+		if len(totalMaxAged) > 0 {
+			logDebug("Aging LSDB done. Total max aged: %v\n%+v", len(totalMaxAged), totalMaxAged)
+		} else {
+			logDebug("Aging LSDB done. Total max aged: %v", len(totalMaxAged))
+		}
 	}
 	if len(totalMaxAged) > 0 {
 		i.flushOrRefreshAgedOutLSAs(totalMaxAged)
@@ -338,4 +342,8 @@ func (i *Instance) floodLSA(fromArea *Area, fromIfi *Interface, l packet.LSAhead
 			ifi.immediateTickNeighborsRetransmissionList()
 		}
 	}
+}
+
+func (i *Instance) recalculateRoutes() {
+	// TODO: recalculate route
 }

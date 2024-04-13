@@ -421,10 +421,8 @@ func (a *Area) procLSU(i *Interface, h *ipv4.Header, lsu *packet.OSPFv2Packet[pa
 
 			// (c) Remove the current database copy from all neighbors' Link
 			//            state retransmission lists.
-			neighborLSRxmChecked := false
 			if existInLSDB {
 				a.removeAllNeighborsLSRetransmission(lsaHdrFromLSDB.GetLSAIdentity())
-				neighborLSRxmChecked = true
 			}
 
 			// (d) Install the new LSA in the link state database (replacing
@@ -435,7 +433,7 @@ func (a *Area) procLSU(i *Interface, h *ipv4.Header, lsu *packet.OSPFv2Packet[pa
 			//            newly installed LSA until MinLSArrival seconds have elapsed.
 			//            The LSA installation process is discussed further in Section
 			//            13.2.
-			a.lsDbInstallNewLSA(l, neighborLSRxmChecked)
+			a.lsDbInstallReceivedLSA(l)
 
 			// (b) Otherwise immediately flood the new LSA out some subset of
 			//            the router's interfaces (see Section 13.3).  In some cases
@@ -478,21 +476,8 @@ func (a *Area) procLSU(i *Interface, h *ipv4.Header, lsu *packet.OSPFv2Packet[pa
 				//        In most cases, the router must then advance the LSA's LS
 				//        sequence number one past the received LS sequence number, and
 				//        originate a new instance of the LSA.
-				// It may be the case the router no longer wishes to originate the
-				//        received LSA. Possible examples include: 1) the LSA is a
-				//        summary-LSA or AS-external-LSA and the router no longer has an
-				//        (advertisable) route to the destination, 2) the LSA is a
-				//        network-LSA but the router is no longer Designated Router for
-				//        the network or 3) the LSA is a network-LSA whose Link State ID
-				//        is one of the router's own IP interface addresses but whose
-				//        Advertising Router is not equal to the router's own Router ID
-				//        (this latter case should be rare, and it indicates that the
-				//        router's Router ID has changed since originating the LSA).  In
-				//        all these cases, instead of updating the LSA, the LSA should be
-				//        flushed from the routing domain by incrementing the received
-				//        LSA's LS age to MaxAge and reflooding (see Section 14.1).
 				if existInLSDB && l.IsMoreRecentThan(lsaHdrFromLSDB) {
-					// TODO: deal with self-originated LSA
+					a.dealWithReceivedNewerSelfOriginatedLSA(i, l)
 				}
 			}
 

@@ -63,29 +63,26 @@ func (a *Area) lsDbInstallLSA(lsa packet.LSAdvertisement, meta *lsaMeta) error {
 	return err
 }
 
-func (a *Area) lsDbInstallNewLSA(lsa packet.LSAdvertisement, isNeighborLSRxmChecked bool) {
-	// Installing a new LSA in the database, either as the result of
-	//        flooding or a newly self-originated LSA, may cause the OSPF
-	//        routing table structure to be recalculated.  The contents of the
-	//        new LSA should be compared to the old instance, if present.  If
-	//        there is no difference, there is no need to recalculate the
-	//        routing table. When comparing an LSA to its previous instance,
-	//        the following are all considered to be differences in contents:
-	h, _, _, exist := a.lsDbGetLSAByIdentity(lsa.GetLSAIdentity(), false)
-	// o   The LSA's Options field has changed.
-	// o   One of the LSA instances has LS age set to MaxAge, and he other does not.
-	// o   The length field in the LSA header has changed.
-	// o   The body of the LSA (i.e., anything outside the 20-byte LSA header) has changed.
-	//		Note that this excludes changes in LS Sequence Number and LS Checksum.
-	if !exist || h.LSOptions != lsa.LSOptions ||
-		(h.LSAge == packet.MaxAge && lsa.LSAge != packet.MaxAge) ||
-		(h.LSAge != packet.MaxAge && lsa.LSAge == packet.MaxAge) ||
-		h.Length != lsa.Length {
-		// TODO: compare LSA content
-		// If the contents are different, the following pieces of the
-		//        routing table must be recalculated, depending on the new LSA's
-		//        LS type field:
-		// TODO: recalculate route
+func (a *Area) lsDbInstallReceivedLSA(lsa packet.LSAdvertisement) {
+	if a.recalculateRoutingTableIfNecessary(lsa.LSAheader) {
+		defer a.ins.recalculateRoutes()
+	}
+	err := a.lsDbInstallLSA(lsa, &lsaMeta{
+		ctime:    time.Now().Add(-time.Duration(lsa.LSAge) * time.Second),
+		recvTime: time.Now(),
+	})
+	if err != nil {
+		logErr("Area %v err install received LSA: %v\n%+v", a.AreaId, err, lsa)
+	}
+	// This old instance must also be removed from all neighbors' Link state retransmission lists (see Section 10).
+	// This is requested by RFC, but in this implementation all LSA in retransmission list are
+	// always retrieved from LSDB with latest copy. So we do not need to do this.
+	//a.removeAllNeighborsLSRetransmission(h.GetLSAIdentity())
+}
+
+func (a *Area) lsDbInstallNewLSA(lsa packet.LSAdvertisement) {
+	if a.recalculateRoutingTableIfNecessary(lsa.LSAheader) {
+		defer a.ins.recalculateRoutes()
 	}
 	// install new LSA into DB
 	// Also, any old instance of the LSA must be removed from the
@@ -94,10 +91,35 @@ func (a *Area) lsDbInstallNewLSA(lsa packet.LSAdvertisement, isNeighborLSRxmChec
 	err := a.lsDbInstallLSA(lsa, newLSAMeta())
 	if err != nil {
 		logErr("Area %v err install new LSA: %v\n%+v", a.AreaId, err, lsa)
-	} else if !isNeighborLSRxmChecked {
-		// This old instance must also be removed from all neighbors' Link state retransmission lists (see Section 10).
-		a.removeAllNeighborsLSRetransmission(h.GetLSAIdentity())
 	}
+}
+
+func (a *Area) recalculateRoutingTableIfNecessary(lh packet.LSAheader) (shouldRecalculateRoute bool) {
+	// Installing a new LSA in the database, either as the result of
+	//        flooding or a newly self-originated LSA, may cause the OSPF
+	//        routing table structure to be recalculated.  The contents of the
+	//        new LSA should be compared to the old instance, if present.  If
+	//        there is no difference, there is no need to recalculate the
+	//        routing table. When comparing an LSA to its previous instance,
+	//        the following are all considered to be differences in contents:
+	h, _, _, exist := a.lsDbGetLSAByIdentity(lh.GetLSAIdentity(), false)
+	// o   The LSA's Options field has changed.
+	// o   One of the LSA instances has LS age set to MaxAge, and he other does not.
+	// o   The length field in the LSA header has changed.
+	// o   The body of the LSA (i.e., anything outside the 20-byte LSA header) has changed.
+	//		Note that this excludes changes in LS Sequence Number and LS Checksum.
+	if !exist || h.LSOptions != lh.LSOptions ||
+		(h.LSAge == packet.MaxAge && lh.LSAge != packet.MaxAge) ||
+		(h.LSAge != packet.MaxAge && lh.LSAge == packet.MaxAge) ||
+		h.Length != lh.Length {
+		// TODO: compare LSA content
+		// If the contents are different, the following pieces of the
+		//        routing table must be recalculated, depending on the new LSA's
+		//        LS type field:
+
+		return true
+	}
+	return false
 }
 
 func newLSAMeta() *lsaMeta {
@@ -180,7 +202,7 @@ func (a *Area) lsDbGetLSAByIdentity(id packet.LSAIdentity, entireLSA bool) (lsaH
 func (lm *lsaMeta) isReceivedLessThanMinLSArrival() bool {
 	lm.rw.RLock()
 	defer lm.rw.RUnlock()
-	return time.Since(lm.ctime) <= packet.MinLSArrival*time.Second
+	return time.Since(lm.recvTime) < packet.MinLSArrival*time.Second
 }
 
 func (lm *lsaMeta) isLastFloodTimeLongerThanMinLSArrival() bool {
