@@ -600,7 +600,7 @@ func (i *Interface) getNeighbor(rtId uint32) (nb *Neighbor, ok bool) {
 func (i *Interface) removeNeighbor(nb *Neighbor) {
 	i.nbMu.Lock()
 	defer i.nbMu.Unlock()
-	nb.clearAllGoroutine()
+	nb.terminate()
 	delete(i.Neighbors, nb.NeighborId)
 	// we are not DR or BDR because of zero priority.
 	// so remember to reset DR or BDR when neighbor disappear
@@ -615,13 +615,16 @@ func (i *Interface) killAllNeighbor() {
 	defer i.nbMu.Unlock()
 	for _, nb := range i.Neighbors {
 		nb.consumeEvent(NbEvKillNbr)
+		nb.terminate()
 	}
 	clear(i.Neighbors)
 }
 
 func (i *Interface) addNeighbor(h *ipv4.Header, hello *packet.OSPFv2Packet[packet.HelloPayloadV2]) *Neighbor {
+	ctx, cancel := context.WithCancel(i.ctx)
 	nb := &Neighbor{
-		lastSeen:         time.Now(),
+		ctx:              ctx,
+		cancel:           cancel,
 		i:                i,
 		State:            NeighborDown,
 		NeighborId:       hello.RouterID,

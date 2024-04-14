@@ -1,6 +1,7 @@
 package ospf
 
 import (
+	"context"
 	"math"
 	"net"
 	"slices"
@@ -92,9 +93,10 @@ func (ns NeighborState) String() string {
 }
 
 type Neighbor struct {
-	lastSeen time.Time
-	i        *Interface
+	i *Interface
 
+	ctx    context.Context
+	cancel context.CancelFunc
 	// The functional level of the neighbor conversation.  This is
 	//        described in more detail in Section 10.1.
 	State NeighborState
@@ -109,9 +111,9 @@ type Neighbor struct {
 	//        retransmit.  The slave can only respond to the master's Database
 	//        Description Packets.  The master/slave relationship is
 	//        negotiated in state ExStart.
-	IsMaster                        bool
-	negotiationRetransmissionTicker *TickerFunc
-	ddRetransmissionTicker          *TickerFunc
+	IsMaster              bool
+	negotiationRtxmTicker *TickerFunc
+	ddRtxmTicker          *TickerFunc
 	// The DD Sequence number of the Database Description packet that
 	//        is currently being sent to the neighbor.
 	DDSeqNumber atomic.Uint32
@@ -191,11 +193,8 @@ type Neighbor struct {
 	lsReqListRtxmTicker *TickerFunc
 }
 
-func (n *Neighbor) clearAllGoroutine() {
-	n.lsRtxmTicker.Terminate()
-	n.lsReqListRtxmTicker.Terminate()
-	n.negotiationRetransmissionTicker.Terminate()
-	n.ddRetransmissionTicker.Terminate()
+func (n *Neighbor) terminate() {
+	n.cancel()
 	if n.lastReceivedDDInvalidTimer != nil {
 		n.lastReceivedDDInvalidTimer.Stop()
 	}
@@ -221,11 +220,11 @@ func (n *Neighbor) transState(target NeighborState) {
 	switch currState {
 	case NeighborExStart:
 		if stateChanged {
-			n.negotiationRetransmissionTicker.Terminate()
+			n.negotiationRtxmTicker.Terminate()
 		}
 	case NeighborExchange:
 		if stateChanged {
-			n.ddRetransmissionTicker.Terminate()
+			n.ddRtxmTicker.Terminate()
 		}
 	case NeighborLoading:
 		if stateChanged {
@@ -534,9 +533,9 @@ func (n *Neighbor) startMasterNegotiation() {
 		p:   dd,
 	}
 
-	n.negotiationRetransmissionTicker.Terminate()
+	n.negotiationRtxmTicker.Terminate()
 	// retransmitted at intervals of RxmtInterval until the next state is entered
-	n.negotiationRetransmissionTicker = TimeTickerFunc(n.i.ctx, time.Duration(n.i.RxmtInterval)*time.Second,
+	n.negotiationRtxmTicker = TimeTickerFunc(n.ctx, time.Duration(n.i.RxmtInterval)*time.Second,
 		func() { n.i.queuePktForSend(pkt) })
 }
 
@@ -655,8 +654,8 @@ func (n *Neighbor) sendDDExchange() {
 	//    by echoing the DD sequence number or
 	// b) RxmtInterval seconds elapse without an acknowledgment, in which case the previous
 	//    Database Description packet is retransmitted.
-	n.ddRetransmissionTicker.Terminate()
-	n.ddRetransmissionTicker = TimeTickerFunc(n.i.ctx, time.Duration(n.i.RxmtInterval)*time.Second,
+	n.ddRtxmTicker.Terminate()
+	n.ddRtxmTicker = TimeTickerFunc(n.ctx, time.Duration(n.i.RxmtInterval)*time.Second,
 		func() { n.i.queuePktForSend(pkt) })
 }
 
@@ -679,7 +678,7 @@ func (n *Neighbor) masterContinueDDExchange(slaveMoreBitSet bool) (needAck bool)
 		n.sendDDExchange()
 		return true
 	}
-	n.ddRetransmissionTicker.Terminate()
+	n.ddRtxmTicker.Terminate()
 	return false
 }
 
@@ -773,7 +772,7 @@ func (n *Neighbor) clearLSReqList() {
 
 func (n *Neighbor) startLSR() {
 	n.lsReqListRtxmTicker.Terminate()
-	n.lsReqListRtxmTicker = TimeTickerFunc(n.i.ctx, time.Duration(n.i.RxmtInterval)*time.Second, func() {
+	n.lsReqListRtxmTicker = TimeTickerFunc(n.ctx, time.Duration(n.i.RxmtInterval)*time.Second, func() {
 		if n.sendOutTopLSR() <= 0 {
 			// no LSR has been sent. means that the list is empty.
 			n.lsReqListRtxmTicker.Terminate()
@@ -866,7 +865,7 @@ func (n *Neighbor) addToLSRetransmissionList(l packet.LSAIdentity) {
 	n.lsRtxmRw.Lock()
 	defer n.lsRtxmRw.Unlock()
 	if n.lsRtxmTicker == nil {
-		n.lsRtxmTicker = TimeTickerFunc(n.i.ctx, time.Duration(n.i.RxmtInterval)*time.Second,
+		n.lsRtxmTicker = TimeTickerFunc(n.ctx, time.Duration(n.i.RxmtInterval)*time.Second,
 			n.doLSRetransmission, true)
 	}
 	n.LSRetransmission[l] = struct{}{}
