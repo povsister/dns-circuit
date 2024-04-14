@@ -423,14 +423,14 @@ func (i *Interface) consumeEvent(e InterfaceStateChangingEvent) {
 		// is done by generating the event KillNbr on all
 		// associated neighbors (see Section 10.2).
 		i.transState(InterfaceDown)
-		i.HelloTicker.Stop()
+		i.HelloTicker.Terminate()
 		i.killAllNeighbor()
 	case IfEvLoopInd:
 		// Since this interface is no longer connected to the
 		// attached network the actions associated with the
 		// above InterfaceDown event are executed.
 		i.transState(InterfaceLoopBack)
-		i.HelloTicker.Stop()
+		i.HelloTicker.Terminate()
 		i.killAllNeighbor()
 	case IfEvUnLoopInd:
 		if i.currState() == InterfaceLoopBack {
@@ -570,7 +570,7 @@ func (i *Interface) doSendPkt(pkt sendPkt) (err error) {
 }
 
 func (i *Interface) runHelloTicker() {
-	i.HelloTicker.Stop()
+	i.HelloTicker.Terminate()
 	i.HelloTicker = TimeTickerFunc(i.ctx, time.Duration(i.HelloInterval)*time.Second,
 		func() {
 			// directly writes the pkt and doNot enter queue.
@@ -676,7 +676,7 @@ func (i *Interface) sendLSUFlood(l packet.LSAIdentity, dst uint32) {
 
 func (i *Interface) immediateTickNeighborsRetransmissionList() {
 	i.rangeOverNeighbors(func(nb *Neighbor) bool {
-		nb.lsRetransmissionTicker.DoFnNow()
+		nb.lsRtxmTicker.DoFnNow()
 		return true
 	})
 }

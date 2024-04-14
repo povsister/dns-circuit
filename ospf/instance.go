@@ -172,7 +172,7 @@ func (i *Instance) start() {
 // this is needed when some LSA need to premature.
 // it prevents LSA from being accidentally refreshed while setting its age to MaxAge.
 func (i *Instance) suspendAgingLSDB() {
-	i.lsDbAgingTicker.Stop()
+	i.lsDbAgingTicker.Suspend()
 }
 
 func (i *Instance) continueAgingLSDB() {

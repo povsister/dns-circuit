@@ -52,7 +52,7 @@ func TimeTickerFunc(ctx context.Context, dur time.Duration, fn func(), waitForTi
 	return ret
 }
 
-func (t *TickerFunc) Stop() {
+func (t *TickerFunc) Terminate() {
 	if t != nil {
 		t.cancel()
 	}

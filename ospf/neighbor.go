@@ -171,9 +171,9 @@ type Neighbor struct {
 	// The list of LSAs that have been flooded but not acknowledged on
 	//        this adjacency.  These will be retransmitted at intervals until
 	//        they are acknowledged, or until the adjacency is destroyed.
-	LSRetransmission       map[packet.LSAIdentity]struct{}
-	lsRetransRw            sync.RWMutex
-	lsRetransmissionTicker *TickerFunc
+	LSRetransmission map[packet.LSAIdentity]struct{}
+	lsRtxmRw         sync.RWMutex
+	lsRtxmTicker     *TickerFunc
 
 	// The complete list of LSAs that make up the area link-state
 	//        database, at the moment the neighbor goes into Database Exchange
@@ -186,16 +186,16 @@ type Neighbor struct {
 	//        received, and is then sent to the neighbor in Link State Request
 	//        packets.  The list is depleted as appropriate Link State Update
 	//        packets are received.
-	LSRequest                 []packet.LSAheader
-	lsReqRw                   sync.RWMutex
-	lsReqRetransmissionTicker *TickerFunc
+	LSRequest           []packet.LSAheader
+	lsReqListRw         sync.RWMutex
+	lsReqListRtxmTicker *TickerFunc
 }
 
 func (n *Neighbor) clearAllGoroutine() {
-	n.lsRetransmissionTicker.Stop()
-	n.lsReqRetransmissionTicker.Stop()
-	n.negotiationRetransmissionTicker.Stop()
-	n.ddRetransmissionTicker.Stop()
+	n.lsRtxmTicker.Terminate()
+	n.lsReqListRtxmTicker.Terminate()
+	n.negotiationRetransmissionTicker.Terminate()
+	n.ddRetransmissionTicker.Terminate()
 	if n.lastReceivedDDInvalidTimer != nil {
 		n.lastReceivedDDInvalidTimer.Stop()
 	}
@@ -221,15 +221,15 @@ func (n *Neighbor) transState(target NeighborState) {
 	switch currState {
 	case NeighborExStart:
 		if stateChanged {
-			n.negotiationRetransmissionTicker.Stop()
+			n.negotiationRetransmissionTicker.Terminate()
 		}
 	case NeighborExchange:
 		if stateChanged {
-			n.ddRetransmissionTicker.Stop()
+			n.ddRetransmissionTicker.Terminate()
 		}
 	case NeighborLoading:
 		if stateChanged {
-			n.lsReqRetransmissionTicker.Stop()
+			n.lsReqListRtxmTicker.Terminate()
 		}
 	}
 	// check dst state
@@ -534,7 +534,7 @@ func (n *Neighbor) startMasterNegotiation() {
 		p:   dd,
 	}
 
-	n.negotiationRetransmissionTicker.Stop()
+	n.negotiationRetransmissionTicker.Terminate()
 	// retransmitted at intervals of RxmtInterval until the next state is entered
 	n.negotiationRetransmissionTicker = TimeTickerFunc(n.i.ctx, time.Duration(n.i.RxmtInterval)*time.Second,
 		func() { n.i.queuePktForSend(pkt) })
@@ -655,7 +655,7 @@ func (n *Neighbor) sendDDExchange() {
 	//    by echoing the DD sequence number or
 	// b) RxmtInterval seconds elapse without an acknowledgment, in which case the previous
 	//    Database Description packet is retransmitted.
-	n.ddRetransmissionTicker.Stop()
+	n.ddRetransmissionTicker.Terminate()
 	n.ddRetransmissionTicker = TimeTickerFunc(n.i.ctx, time.Duration(n.i.RxmtInterval)*time.Second,
 		func() { n.i.queuePktForSend(pkt) })
 }
@@ -679,7 +679,7 @@ func (n *Neighbor) masterContinueDDExchange(slaveMoreBitSet bool) (needAck bool)
 		n.sendDDExchange()
 		return true
 	}
-	n.ddRetransmissionTicker.Stop()
+	n.ddRetransmissionTicker.Terminate()
 	return false
 }
 
@@ -718,14 +718,14 @@ func (n *Neighbor) slaveDDEchoAndExchange(dd *packet.OSPFv2Packet[packet.DbDescP
 }
 
 func (n *Neighbor) isLSReqListEmpty() bool {
-	n.lsReqRw.RLock()
-	defer n.lsReqRw.RUnlock()
+	n.lsReqListRw.RLock()
+	defer n.lsReqListRw.RUnlock()
 	return len(n.LSRequest) <= 0
 }
 
 func (n *Neighbor) isInLSReqList(l packet.LSAIdentity) bool {
-	n.lsReqRw.RLock()
-	defer n.lsReqRw.RUnlock()
+	n.lsReqListRw.RLock()
+	defer n.lsReqListRw.RUnlock()
 	for _, r := range n.LSRequest {
 		if r.GetLSAIdentity() == l {
 			return true
@@ -735,8 +735,8 @@ func (n *Neighbor) isInLSReqList(l packet.LSAIdentity) bool {
 }
 
 func (n *Neighbor) getFromLSReqList(l packet.LSAIdentity) (lsaH packet.LSAheader, ok bool) {
-	n.lsReqRw.RLock()
-	defer n.lsReqRw.RUnlock()
+	n.lsReqListRw.RLock()
+	defer n.lsReqListRw.RUnlock()
 	for _, r := range n.LSRequest {
 		if r.GetLSAIdentity() == l {
 			return r, true
@@ -749,42 +749,42 @@ func (n *Neighbor) deleteFromLSReqList(l packet.LSAIdentity) {
 	defer func() {
 		// immediately trans neighbor state by calling ticker
 		if n.isLSReqListEmpty() {
-			n.lsReqRetransmissionTicker.DoFnNow()
+			n.lsReqListRtxmTicker.DoFnNow()
 		}
 	}()
-	n.lsReqRw.Lock()
-	defer n.lsReqRw.Unlock()
+	n.lsReqListRw.Lock()
+	defer n.lsReqListRw.Unlock()
 	n.LSRequest = slices.DeleteFunc(n.LSRequest, func(r packet.LSAheader) bool {
 		return r.GetLSAIdentity() == l
 	})
 }
 
 func (n *Neighbor) appendLSReqList(lsrs ...packet.LSAheader) {
-	n.lsReqRw.Lock()
-	defer n.lsReqRw.Unlock()
+	n.lsReqListRw.Lock()
+	defer n.lsReqListRw.Unlock()
 	n.LSRequest = append(n.LSRequest, lsrs...)
 }
 
 func (n *Neighbor) clearLSReqList() {
-	n.lsReqRw.Lock()
-	defer n.lsReqRw.Unlock()
+	n.lsReqListRw.Lock()
+	defer n.lsReqListRw.Unlock()
 	clear(n.LSRequest)
 }
 
 func (n *Neighbor) startLSR() {
-	n.lsReqRetransmissionTicker.Stop()
-	n.lsReqRetransmissionTicker = TimeTickerFunc(n.i.ctx, time.Duration(n.i.RxmtInterval)*time.Second, func() {
+	n.lsReqListRtxmTicker.Terminate()
+	n.lsReqListRtxmTicker = TimeTickerFunc(n.i.ctx, time.Duration(n.i.RxmtInterval)*time.Second, func() {
 		if n.sendOutTopLSR() <= 0 {
 			// no LSR has been sent. means that the list is empty.
-			n.lsReqRetransmissionTicker.Stop()
+			n.lsReqListRtxmTicker.Terminate()
 			n.consumeEvent(NbEvLoadingDone)
 		}
 	})
 }
 
 func (n *Neighbor) sendOutTopLSR() int {
-	n.lsReqRw.RLock()
-	defer n.lsReqRw.RUnlock()
+	n.lsReqListRw.RLock()
+	defer n.lsReqListRw.RUnlock()
 	if len(n.LSRequest) <= 0 {
 		return 0
 	}
@@ -809,19 +809,19 @@ func (n *Neighbor) sendOutTopLSR() int {
 }
 
 func (n *Neighbor) clearLSRetransmissionList() {
-	n.lsRetransRw.Lock()
-	defer n.lsRetransRw.Unlock()
-	n.lsRetransmissionTicker.Suspend()
+	n.lsRtxmRw.Lock()
+	defer n.lsRtxmRw.Unlock()
+	n.lsRtxmTicker.Suspend()
 	clear(n.LSRetransmission)
 }
 
 func (n *Neighbor) tryEmptyLSRetransmissionListByAck(lsAcks *packet.OSPFv2Packet[packet.LSAcknowledgementPayload]) (
 	suspiciousAcks []packet.LSAheader) {
-	n.lsRetransRw.Lock()
-	defer n.lsRetransRw.Unlock()
+	n.lsRtxmRw.Lock()
+	defer n.lsRtxmRw.Unlock()
 	defer func() {
 		if len(n.LSRetransmission) <= 0 {
-			n.lsRetransmissionTicker.Suspend()
+			n.lsRtxmTicker.Suspend()
 		}
 	}()
 
@@ -863,19 +863,19 @@ func (n *Neighbor) tryEmptyLSRetransmissionListByAck(lsAcks *packet.OSPFv2Packet
 }
 
 func (n *Neighbor) addToLSRetransmissionList(l packet.LSAIdentity) {
-	n.lsRetransRw.Lock()
-	defer n.lsRetransRw.Unlock()
-	if n.lsRetransmissionTicker == nil {
-		n.lsRetransmissionTicker = TimeTickerFunc(n.i.ctx, time.Duration(n.i.RxmtInterval)*time.Second,
+	n.lsRtxmRw.Lock()
+	defer n.lsRtxmRw.Unlock()
+	if n.lsRtxmTicker == nil {
+		n.lsRtxmTicker = TimeTickerFunc(n.i.ctx, time.Duration(n.i.RxmtInterval)*time.Second,
 			n.doLSRetransmission, true)
 	}
 	n.LSRetransmission[l] = struct{}{}
-	n.lsRetransmissionTicker.Reset()
+	n.lsRtxmTicker.Reset()
 }
 
 func (n *Neighbor) doLSRetransmission() {
-	n.lsRetransRw.RLock()
-	defer n.lsRetransRw.RUnlock()
+	n.lsRtxmRw.RLock()
+	defer n.lsRtxmRw.RUnlock()
 	for l := range n.LSRetransmission {
 		_, lsa, meta, ok := n.i.Area.lsDbGetLSAByIdentity(l, true)
 		if !ok {
@@ -901,20 +901,20 @@ func (n *Neighbor) doLSRetransmission() {
 }
 
 func (n *Neighbor) removeFromLSRetransmissionList(lsa packet.LSAIdentity) {
-	n.lsRetransRw.Lock()
-	defer n.lsRetransRw.Unlock()
+	n.lsRtxmRw.Lock()
+	defer n.lsRtxmRw.Unlock()
 	delete(n.LSRetransmission, lsa)
 }
 
 func (n *Neighbor) isLSRtxmListEmpty() bool {
-	n.lsRetransRw.RLock()
-	defer n.lsRetransRw.RUnlock()
+	n.lsRtxmRw.RLock()
+	defer n.lsRtxmRw.RUnlock()
 	return len(n.LSRetransmission) <= 0
 }
 
 func (n *Neighbor) isInLSRetransmissionList(l packet.LSAIdentity) bool {
-	n.lsRetransRw.RLock()
-	defer n.lsRetransRw.RUnlock()
+	n.lsRtxmRw.RLock()
+	defer n.lsRtxmRw.RUnlock()
 	_, exist := n.LSRetransmission[l]
 	return exist
 }
