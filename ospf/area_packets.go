@@ -42,7 +42,7 @@ func (i *Interface) queuePktForSend(pkt sendPkt) {
 	select {
 	case i.pendingSendPkt <- pkt:
 	default:
-		logWarn("Interface %s pending send pkt queue full. Dropped 1 %s pkt", pkt.p.GetType())
+		logWarn("Interface %s pending send pkt queue full. Dropped 1 %s pkt", i.c.ifi.Name, pkt.p.GetType())
 	}
 }
 

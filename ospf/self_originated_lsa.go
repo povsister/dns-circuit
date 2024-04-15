@@ -79,7 +79,11 @@ func (a *Area) tryUpdatingExistingLSA(id packet.LSAIdentity, i *Interface, modFn
 		// update LSA header for re-originating
 		seqIncred := lsa.PrepareReOriginating(true)
 		if err := lsa.FixLengthAndChkSum(); err != nil {
-			logErr("Area %v err fix LSA chkSum while updating with interface %v: %v\n%v", a.AreaId, i.c.ifi.Name, err, lsa)
+			if i != nil {
+				logErr("Area %v err fix LSA chkSum while updating with interface %v: %v\n%v", a.AreaId, i.c.ifi.Name, err, lsa)
+			} else {
+				logErr("Area %v err fix LSA chkSum while updating: %v\n%v", a.AreaId, err, lsa)
+			}
 			return true
 		}
 		// Check if the existing LSA exceed maxSeqNum.
@@ -89,7 +93,11 @@ func (a *Area) tryUpdatingExistingLSA(id packet.LSAIdentity, i *Interface, modFn
 			return true
 		}
 		if a.lsDbInstallNewLSA(lsa) {
-			logDebug("Area %v successfully updated LSA with interface %v:\n%v", a.AreaId, i.c.ifi.Name, lsa)
+			if i != nil {
+				logDebug("Area %v successfully updated LSA with interface %v:\n%v", a.AreaId, i.c.ifi.Name, lsa)
+			} else {
+				logDebug("Area %v successfully updated LSA:\n%v", a.AreaId, lsa)
+			}
 			a.ins.floodLSA(a, i, lsa.LSAheader, a.ins.RouterId)
 		}
 		return true
